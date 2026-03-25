@@ -1,0 +1,45 @@
+program -> funcs
+
+funcs -> {func}*
+func  -> type IDEN "(" {argdecls}? ")" block
+
+argdecls -> argdecl {"," argdecl}*
+argdecl -> type IDEN
+
+block -> "{" {stmt}* "}"
+
+stmt -> "if" "(" expr ")" stmt {"else" stmt}
+      | "while" "(" expr ")" stmt
+      | "do" stmt "while" "(" expr ")" ";"
+      | "for" "(" expr ";" expr ";" expr ")" stmt
+      | "return" expr ";"
+      | "continue" ";"
+      | "break" ";"
+      | block
+      | expr ";"
+
+type -> "void" | "int" | "bool" | IDEN
+
+expr        -> comma_expr
+comma_expr  -> {comma_expr ","}? assign_expr
+assign_expr -> ter_expr {"=" assign_expr}?
+ter_expr    -> or_expr {"?" expr ":" ter_expr}?
+or_expr     -> {or_expr "||"}? and_expr
+and_expr    -> {and_expr "&&"}? eq_expr 
+eq_expr     -> {eq_expr ("=="|"!=")}? ineq_expr 
+ineq_expr   -> {ineq_expr ("<"|"<="|">"|">=")}? add_expr 
+add_expr    -> {add_expr ("+"|"-")}? mul_expr 
+mul_expr    -> {mul_expr ("*"|"/"|"%")}? unary_expr
+unary_expr  -> ("+"|"-"|"!"|"&"|"*"|"sizeof") unary_expr
+             | access_expr
+access_expr -> base_expr "(" {expr {"," expr}*}? ")"
+             | base_expr "[" expr "]"
+             | base_expr
+
+base_expr -> "(" expr ")"
+           | IDEN
+           | NUM_LIT
+           | STR_LIT
+           | "true"
+           | "false"
+           | "nullptr"
