@@ -11,7 +11,7 @@ pub struct Token {
     pub pos: usize,
 }
 
-#[derive(Kinded, Debug, Clone, PartialEq, Eq, Display)]
+#[derive(Kinded, Debug, Clone, PartialEq, Display)]
 #[display(rename_all = "lowercase")]
 pub enum TokenValue {
     #[display("(")]
@@ -102,6 +102,7 @@ pub enum TokenValue {
     Break,
     Void,
     Int,
+    Float,
     Bool,
     True,
     False,
@@ -112,7 +113,7 @@ pub enum TokenValue {
     Typedef,
     #[kinded(rename = "numeric literal")]
     NumLit(u32),
-    FloatLit(u32),
+    FloatLit(f64),
     #[kinded(rename = "identifier")]
     Iden(String),
     #[display("\"{_0}\"")]
@@ -164,8 +165,6 @@ impl<'a> Scanner<'a> {
         while self.chars.peek().is_some_and(char::is_ascii_whitespace) {
             self.next_char();
         }
-
-        const NUM_RADIX: u32 = 10;
 
         let initial_pos = self.pos;
         let initial_line = self.line;
@@ -275,7 +274,7 @@ impl<'a> Scanner<'a> {
                 Some(TokenValue::StrLit(str))
             }
             Some(ch @ '0'..='9') => {
-                let base = if ch == '0' {
+                let radix = if ch == '0' {
                     match self.chars.peek() {
                         Some('b' | 'B') => {
                             self.chars.next();
@@ -291,17 +290,33 @@ impl<'a> Scanner<'a> {
                     10
                 };
 
-                let mut num = ch.to_digit(base).unwrap();
+                let mut num = ch.to_digit(radix).unwrap();
 
-                while let Some(d) = self.chars.peek().and_then(|ch| ch.to_digit(base)) {
+                while let Some(d) = self.chars.peek().and_then(|ch| ch.to_digit(radix)) {
                     self.next_char();
                     num = num
-                        .checked_mul(base)
+                        .checked_mul(radix)
                         .and_then(|n| n.checked_add(d))
                         .ok_or(ScanError::IntegerOverflow)?;
                 }
 
-                Some(TokenValue::NumLit(num))
+                match self.chars.peek() {
+                    Some('.') => {
+                        self.chars.next();
+
+                        let mut factor = 0.1;
+                        let mut num_f = num as f64;
+
+                        while let Some(d) = self.chars.peek().and_then(|ch| ch.to_digit(radix)) {
+                            self.next_char();
+                            num_f += (d as f64) * factor;
+                            factor /= 10.0;
+                        }
+
+                        Some(TokenValue::FloatLit(num_f))
+                    }
+                    _ => Some(TokenValue::NumLit(num)),
+                }
             }
             Some(ch) if ch.is_ascii_alphanumeric() => {
                 let mut iden = String::from(ch);
@@ -324,6 +339,7 @@ impl<'a> Scanner<'a> {
                     "break" => Some(TokenValue::Break),
                     "void" => Some(TokenValue::Void),
                     "int" => Some(TokenValue::Int),
+                    "float" => Some(TokenValue::Float),
                     "bool" => Some(TokenValue::Bool),
                     "true" => Some(TokenValue::True),
                     "false" => Some(TokenValue::False),

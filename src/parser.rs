@@ -140,6 +140,7 @@ pub enum Expr {
     Iden(String),
     StrLit(String),
     NumLit(u32),
+    FloatLit(f64),
     BoolLit(bool),
     Nullptr,
 }
@@ -562,6 +563,10 @@ impl<'a, I: Iterator<Item = Result<Token, ScanError>>> LangParser<'a, I> {
             self.accept(TokenValueKind::NumLit)?.map(|t| t.val)
         {
             Ok(Expr::NumLit(n))
+        } else if let Some(TokenValue::FloatLit(f)) =
+            self.accept(TokenValueKind::FloatLit)?.map(|t| t.val)
+        {
+            Ok(Expr::FloatLit(f))
         } else if let Some(TokenValue::Iden(name)) =
             self.accept(TokenValueKind::Iden)?.map(|t| t.val)
         {

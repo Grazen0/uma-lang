@@ -3,8 +3,7 @@ int main() {
   a = true ? a ? b : c : nullptr;
   break;
   break;
-  foo = 0b1010 + 0x10 + 010 + 0b;
-  // return 2.43 + .21 + 34.;
+  0b1010 + 0x10, 0001;
   continue;
 }
 
@@ -26,4 +25,5 @@ int fib(int n) {
       &***foo = -4 + sizeof(3);
 
   return fib(n - 1) + fib(n - 2);
+  return 2.43 + 21 + 34.;
 }
