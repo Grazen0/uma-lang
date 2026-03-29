@@ -1,373 +1,370 @@
-use std::{iter::Peekable, str::Chars};
+use std::{iter::Peekable, num::IntErrorKind, ops::Range, str::CharIndices};
 
-use derive_more::{Display, Error};
+use derive_more::Display;
 use kinded::Kinded;
 
 #[derive(Debug, Clone)]
 pub struct Token {
+    pub byte_range: Range<usize>,
     pub val: TokenValue,
-    pub line: usize,
-    pub col: usize,
-    pub pos: usize,
 }
 
-#[derive(Kinded, Debug, Clone, PartialEq, Display)]
-#[display(rename_all = "lowercase")]
+#[derive(Kinded, Debug, Clone, PartialEq)]
 pub enum TokenValue {
-    #[display("(")]
     #[kinded(rename = "'('")]
     LParen,
-    #[display(")")]
     #[kinded(rename = "')'")]
     RParen,
-    #[display("{{")]
     #[kinded(rename = "'{{'")]
     LBrace,
-    #[display("}}")]
     #[kinded(rename = "'}}'")]
     RBrace,
-    #[display("[")]
     #[kinded(rename = "'['")]
     LBracket,
-    #[display("]")]
     #[kinded(rename = "']'")]
     RBracket,
-    #[display("+")]
     #[kinded(rename = "'+'")]
     Add,
-    #[display("-")]
     #[kinded(rename = "'-'")]
     Sub,
-    #[display("*")]
     #[kinded(rename = "'*'")]
     Asterisk,
-    #[display("/")]
     #[kinded(rename = "'/'")]
     Div,
-    #[display("%")]
     #[kinded(rename = "'%'")]
     Mod,
-    #[display("||")]
     #[kinded(rename = "'||'")]
     BoolOr,
-    #[display("&&")]
+    #[kinded(rename = "'|'")]
+    BitOr,
     #[kinded(rename = "'&&'")]
     BoolAnd,
-    #[display("!")]
-    #[kinded(rename = "'!'")]
-    BoolNot,
-    #[display("&")]
     #[kinded(rename = "'&'")]
     Ampersand,
-    #[display("==")]
+    #[kinded(rename = "'!'")]
+    BoolNot,
     #[kinded(rename = "'=='")]
     Eq,
-    #[display("=")]
     #[kinded(rename = "'='")]
     Assign,
-    #[display("?")]
     #[kinded(rename = "'?'")]
     Question,
-    #[display(":")]
     #[kinded(rename = "':'")]
     Colon,
-    #[display("!=")]
     #[kinded(rename = "'!='")]
     Neq,
-    #[display("<")]
     #[kinded(rename = "'<'")]
     Lt,
-    #[display("<=")]
     #[kinded(rename = "'<='")]
     Leq,
-    #[display(">")]
     #[kinded(rename = "'>'")]
     Gt,
-    #[display(">=")]
     #[kinded(rename = "'>='")]
     Geq,
-    #[display(",")]
     #[kinded(rename = "','")]
     Comma,
-    #[display(";")]
     #[kinded(rename = "';'")]
     Semi,
+    #[kinded(rename = "'if'")]
     If,
+    #[kinded(rename = "'else'")]
     Else,
+    #[kinded(rename = "'while'")]
     While,
+    #[kinded(rename = "'do'")]
     Do,
+    #[kinded(rename = "'for'")]
     For,
+    #[kinded(rename = "'return'")]
     Return,
+    #[kinded(rename = "'continue'")]
     Continue,
+    #[kinded(rename = "'break'")]
     Break,
+    #[kinded(rename = "'void'")]
     Void,
+    #[kinded(rename = "'int'")]
     Int,
+    #[kinded(rename = "'float'")]
     Float,
+    #[kinded(rename = "'bool'")]
     Bool,
+    #[kinded(rename = "'true'")]
     True,
+    #[kinded(rename = "'false'")]
     False,
+    #[kinded(rename = "'nullptr'")]
     Nullptr,
+    #[kinded(rename = "'sizeof'")]
     Sizeof,
+    #[kinded(rename = "'struct'")]
     Struct,
+    #[kinded(rename = "'enum'")]
     Enum,
+    #[kinded(rename = "'typedef'")]
     Typedef,
     #[kinded(rename = "numeric literal")]
     NumLit(u32),
+    #[kinded(rename = "float literal")]
     FloatLit(f64),
-    #[kinded(rename = "identifier")]
-    Iden(String),
-    #[display("\"{_0}\"")]
     #[kinded(rename = "string literal")]
     StrLit(String),
+    #[kinded(rename = "identifier")]
+    Iden(String),
+    #[kinded(rename = "error")]
+    Error(ScanErrorValue),
 }
 
-#[derive(Debug, Clone, Error, Display)]
-pub enum ScanError {
-    #[display("Unexpected char: '{_0}'")]
-    UnexpectedChar(#[error(ignore)] char),
-    #[display("Unexpected EOF")]
+#[derive(Debug, Clone, Display, PartialEq, Eq)]
+pub enum ScanErrorValue {
+    #[display("unexpected character '{_0}'")]
+    UnexpectedChar(char),
+    #[display("unknown escape sequence '\\{_0}'")]
+    UnknownEscapeSeq(char),
+    #[display("unexpected newline")]
+    UnexpectedNewLine,
+    #[display("unexpected end-of-file")]
     UnexpectedEof,
-    #[display("Integer overflow")]
-    IntegerOverflow,
+    #[display("integer literal is too large")]
+    IntLitOverflow,
+    #[display("invalid integer literal")]
+    InvalidIntLit,
+    #[display("invalid float literal")]
+    InvalidFloatLit,
 }
 
 #[derive(Debug, Clone)]
 pub struct Scanner<'a> {
-    chars: Peekable<Chars<'a>>,
-    pos: usize,
-    line: usize,
-    col: usize,
+    chars: Peekable<CharIndices<'a>>,
+    byte_pos: usize,
 }
 
 impl<'a> Scanner<'a> {
     pub fn new(src: &'a str) -> Self {
         Self {
-            chars: src.chars().peekable(),
-            pos: 0,
-            line: 1,
-            col: 1,
+            chars: src.char_indices().peekable(),
+            byte_pos: 0,
         }
     }
 
     fn next_char(&mut self) -> Option<char> {
-        let ch = self.chars.next();
-        if ch.is_some() {
-            self.pos += 1;
-        }
-        ch
-    }
+        let (_, ch) = self.chars.next()?;
 
-    fn unexpected_char(&self, ch: char) -> ScanError {
-        ScanError::UnexpectedChar(ch)
-    }
-
-    fn next_token(&mut self) -> Result<Option<Token>, ScanError> {
-        while self.chars.peek().is_some_and(char::is_ascii_whitespace) {
-            self.next_char();
+        if let Some((next_byte_pos, _)) = self.chars.peek() {
+            self.byte_pos = *next_byte_pos;
         }
 
-        let initial_pos = self.pos;
-        let initial_line = self.line;
-        let initial_col = self.col;
+        Some(ch)
+    }
 
-        let val: Option<TokenValue> = match self.next_char() {
-            Some('+') => Some(TokenValue::Add),
-            Some('-') => Some(TokenValue::Sub),
-            Some('*') => Some(TokenValue::Asterisk),
-            Some('/') => match self.chars.peek() {
-                Some('/') => {
+    fn accept(&mut self, f: impl FnOnce(char) -> bool) -> Option<char> {
+        if self.chars.peek().is_some_and(|&(_, ch)| f(ch)) {
+            Some(self.next_char().unwrap())
+        } else {
+            None
+        }
+    }
+
+    fn accept_char(&mut self, ch: char) -> bool {
+        self.accept(|c| c == ch).is_some()
+    }
+
+    fn next_token(&mut self) -> Option<Token> {
+        while self.accept(|ch| ch.is_whitespace()).is_some() {}
+
+        let init_byte_pos = self.byte_pos;
+
+        let val = match self.next_char()? {
+            '+' => TokenValue::Add,
+            '-' => TokenValue::Sub,
+            '*' => TokenValue::Asterisk,
+            '/' => {
+                if self.accept_char('/') {
                     while self.next_char().is_some_and(|ch| ch != '\n') {}
                     return self.next_token();
-                }
-                Some('*') => {
-                    self.next_char();
-
+                } else if self.accept_char('*') {
                     loop {
-                        let next = self.next_char().ok_or(ScanError::UnexpectedEof)?;
-                        if next == '*' && self.next_char().is_some_and(|ch| ch == '/') {
-                            break;
+                        let Some(ch) = self.next_char() else {
+                            break TokenValue::Error(ScanErrorValue::UnexpectedEof);
+                        };
+
+                        if ch == '*' && self.next_char().is_some_and(|ch| ch == '/') {
+                            return self.next_token();
                         }
                     }
-
-                    return self.next_token();
+                } else {
+                    TokenValue::Div
                 }
-                _ => Some(TokenValue::Div),
-            },
-            Some('%') => Some(TokenValue::Mod),
-            Some('(') => Some(TokenValue::LParen),
-            Some(')') => Some(TokenValue::RParen),
-            Some('{') => Some(TokenValue::LBrace),
-            Some('}') => Some(TokenValue::RBrace),
-            Some('[') => Some(TokenValue::LBracket),
-            Some(']') => Some(TokenValue::RBracket),
-            Some('?') => Some(TokenValue::Question),
-            Some(':') => Some(TokenValue::Colon),
-            Some('<') => match self.chars.peek() {
-                Some('=') => {
-                    self.next_char();
-                    Some(TokenValue::Leq)
-                }
-                _ => Some(TokenValue::Lt),
-            },
-            Some('|') => match self.chars.peek() {
-                Some('|') => {
-                    self.next_char();
-                    Some(TokenValue::BoolOr)
-                }
-                Some(&ch) => return Err(self.unexpected_char(ch)),
-                None => return Err(ScanError::UnexpectedEof),
-            },
-            Some('&') => match self.chars.peek() {
-                Some('&') => {
-                    self.next_char();
-                    Some(TokenValue::BoolAnd)
-                }
-                _ => Some(TokenValue::Ampersand),
-            },
-            Some('>') => match self.chars.peek() {
-                Some('=') => {
-                    self.next_char();
-                    Some(TokenValue::Geq)
-                }
-                _ => Some(TokenValue::Gt),
-            },
-            Some('=') => match self.chars.peek() {
-                Some('=') => {
-                    self.next_char();
-                    Some(TokenValue::Eq)
-                }
-                _ => Some(TokenValue::Assign),
-            },
-            Some('!') => match self.chars.peek() {
-                Some('=') => {
-                    self.next_char();
-                    Some(TokenValue::Neq)
-                }
-                _ => Some(TokenValue::BoolNot),
-            },
-            Some(',') => Some(TokenValue::Comma),
-            Some(';') => Some(TokenValue::Semi),
-            Some('"') => {
-                let mut str = String::new();
-
-                loop {
-                    let mut ch = self.next_char().ok_or(ScanError::UnexpectedEof)?;
-
-                    if ch == '"' {
-                        break;
-                    }
-
-                    if ch == '\\' {
-                        ch = match self.next_char().ok_or(ScanError::UnexpectedEof)? {
-                            'n' => '\n',
-                            'r' => '\r',
-                            '0' => '\0',
-                            '\\' => '\\',
-                            '"' => '"',
-                            ch => return Err(ScanError::UnexpectedChar(ch)),
-                        }
-                    }
-
-                    str.push(ch);
-                }
-
-                Some(TokenValue::StrLit(str))
             }
-            Some(ch @ '0'..='9') => {
-                let radix = if ch == '0' {
-                    match self.chars.peek() {
-                        Some('b' | 'B') => {
-                            self.chars.next();
-                            2
+            '%' => TokenValue::Mod,
+            '(' => TokenValue::LParen,
+            ')' => TokenValue::RParen,
+            '{' => TokenValue::LBrace,
+            '}' => TokenValue::RBrace,
+            '[' => TokenValue::LBracket,
+            ']' => TokenValue::RBracket,
+            '?' => TokenValue::Question,
+            ':' => TokenValue::Colon,
+            '|' => {
+                if self.accept_char('|') {
+                    TokenValue::BoolOr
+                } else {
+                    TokenValue::BitOr
+                }
+            }
+            '&' => {
+                if self.accept_char('&') {
+                    TokenValue::BoolAnd
+                } else {
+                    TokenValue::Ampersand
+                }
+            }
+            '<' => {
+                if self.accept_char('=') {
+                    TokenValue::Leq
+                } else {
+                    TokenValue::Lt
+                }
+            }
+            '>' => {
+                if self.accept_char('=') {
+                    TokenValue::Geq
+                } else {
+                    TokenValue::Gt
+                }
+            }
+            '=' => {
+                if self.accept_char('=') {
+                    TokenValue::Eq
+                } else {
+                    TokenValue::Assign
+                }
+            }
+            '!' => {
+                if self.accept_char('=') {
+                    TokenValue::Neq
+                } else {
+                    TokenValue::BoolNot
+                }
+            }
+
+            ',' => TokenValue::Comma,
+            ';' => TokenValue::Semi,
+            '"' => {
+                let mut buf = String::new();
+
+                'outer: loop {
+                    match self.next_char() {
+                        Some('"') => break 'outer TokenValue::StrLit(buf),
+                        Some('\n') => {
+                            break 'outer TokenValue::Error(ScanErrorValue::UnexpectedNewLine);
                         }
-                        Some('x' | 'X') => {
-                            self.chars.next();
-                            16
+                        Some('\\') => {
+                            let esc_ch = match self.next_char() {
+                                Some('n') => '\n',
+                                Some('r') => '\r',
+                                Some('0') => '\0',
+                                Some('\\') => '\\',
+                                Some('"') => '"',
+                                Some(ch) => {
+                                    break 'outer TokenValue::Error(
+                                        ScanErrorValue::UnknownEscapeSeq(ch),
+                                    );
+                                }
+                                None => {
+                                    break 'outer TokenValue::Error(ScanErrorValue::UnexpectedEof);
+                                }
+                            };
+                            buf.push(esc_ch);
                         }
-                        _ => 8,
+                        Some(ch) => buf.push(ch),
+                        None => {
+                            break 'outer TokenValue::Error(ScanErrorValue::UnexpectedEof);
+                        }
+                    }
+                }
+            }
+            init_ch @ ('0'..='9') => {
+                let radix = if init_ch == '0' {
+                    if self.accept(|ch| ch == 'b' || ch == 'B').is_some() {
+                        2
+                    } else if self.accept(|ch| ch == 'x' || ch == 'X').is_some() {
+                        16
+                    } else {
+                        8
                     }
                 } else {
                     10
                 };
 
-                let mut num = ch.to_digit(radix).unwrap();
+                let mut buf = String::from(init_ch);
 
-                while let Some(d) = self.chars.peek().and_then(|ch| ch.to_digit(radix)) {
-                    self.next_char();
-                    num = num
-                        .checked_mul(radix)
-                        .and_then(|n| n.checked_add(d))
-                        .ok_or(ScanError::IntegerOverflow)?;
+                while let Some(ch) = self.accept(|ch| (ch).is_digit(radix)) {
+                    buf.push(ch);
                 }
 
-                match self.chars.peek() {
-                    Some('.') => {
-                        self.chars.next();
+                if let Some(dot) = self.accept(|ch| ch == '.') {
+                    buf.push(dot);
 
-                        let mut factor = 0.1;
-                        let mut num_f = num as f64;
-
-                        while let Some(d) = self.chars.peek().and_then(|ch| ch.to_digit(radix)) {
-                            self.next_char();
-                            num_f += (d as f64) * factor;
-                            factor /= 10.0;
-                        }
-
-                        Some(TokenValue::FloatLit(num_f))
+                    while let Some(ch) = self.accept(|ch| (ch).is_digit(radix)) {
+                        buf.push(ch);
                     }
-                    _ => Some(TokenValue::NumLit(num)),
+
+                    buf.parse()
+                        .map(TokenValue::FloatLit)
+                        .unwrap_or_else(|_| TokenValue::Error(ScanErrorValue::InvalidFloatLit))
+                } else {
+                    buf.parse().map(TokenValue::NumLit).unwrap_or_else(|e| {
+                        if e.kind() == &IntErrorKind::PosOverflow {
+                            TokenValue::Error(ScanErrorValue::IntLitOverflow)
+                        } else {
+                            TokenValue::Error(ScanErrorValue::InvalidIntLit)
+                        }
+                    })
                 }
             }
-            Some(ch) if ch.is_ascii_alphanumeric() => {
+            ch if ch.is_alphanumeric() => {
                 let mut iden = String::from(ch);
 
-                while let Some(peek) = self.chars.peek()
-                    && peek.is_ascii_alphanumeric()
-                {
-                    let ch = self.next_char().unwrap();
+                while let Some(ch) = self.accept(|ch| ch.is_alphanumeric()) {
                     iden.push(ch);
                 }
 
                 match iden.as_str() {
-                    "if" => Some(TokenValue::If),
-                    "else" => Some(TokenValue::Else),
-                    "while" => Some(TokenValue::While),
-                    "do" => Some(TokenValue::Do),
-                    "for" => Some(TokenValue::For),
-                    "return" => Some(TokenValue::Return),
-                    "continue" => Some(TokenValue::Continue),
-                    "break" => Some(TokenValue::Break),
-                    "void" => Some(TokenValue::Void),
-                    "int" => Some(TokenValue::Int),
-                    "float" => Some(TokenValue::Float),
-                    "bool" => Some(TokenValue::Bool),
-                    "true" => Some(TokenValue::True),
-                    "false" => Some(TokenValue::False),
-                    "nullptr" => Some(TokenValue::Nullptr),
-                    "sizeof" => Some(TokenValue::Sizeof),
-                    "struct" => Some(TokenValue::Struct),
-                    "enum" => Some(TokenValue::Enum),
-                    "typedef" => Some(TokenValue::Typedef),
-                    _ => Some(TokenValue::Iden(iden)),
+                    "if" => TokenValue::If,
+                    "else" => TokenValue::Else,
+                    "while" => TokenValue::While,
+                    "do" => TokenValue::Do,
+                    "for" => TokenValue::For,
+                    "return" => TokenValue::Return,
+                    "continue" => TokenValue::Continue,
+                    "break" => TokenValue::Break,
+                    "void" => TokenValue::Void,
+                    "int" => TokenValue::Int,
+                    "float" => TokenValue::Float,
+                    "bool" => TokenValue::Bool,
+                    "true" => TokenValue::True,
+                    "false" => TokenValue::False,
+                    "nullptr" => TokenValue::Nullptr,
+                    "sizeof" => TokenValue::Sizeof,
+                    "struct" => TokenValue::Struct,
+                    "enum" => TokenValue::Enum,
+                    "typedef" => TokenValue::Typedef,
+                    _ => TokenValue::Iden(iden),
                 }
             }
-            Some(ch) => return Err(ScanError::UnexpectedChar(ch)),
-            None => None,
+            ch => TokenValue::Error(ScanErrorValue::UnexpectedChar(ch)),
         };
 
-        Ok(val.map(|val| Token {
-            val,
-            pos: initial_pos,
-            line: initial_line,
-            col: initial_col,
-        }))
+        let byte_range = init_byte_pos..self.byte_pos;
+        Some(Token { byte_range, val })
     }
 }
 
 impl<'a> Iterator for Scanner<'a> {
-    type Item = Result<Token, ScanError>;
+    type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_token().transpose()
+        self.next_token()
     }
 }
