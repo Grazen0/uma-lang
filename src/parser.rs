@@ -60,16 +60,16 @@ impl ParseError {
 pub type ParseResult<T> = Result<T, Vec<ParseError>>;
 
 #[derive(Debug, Clone)]
-pub struct Program {
-    funcs: Vec<Func>,
+pub struct SourceFile {
+    pub funcs: Vec<Func>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Func {
-    ret_type: Type,
-    name: String,
-    args: Vec<ArgDecl>,
-    blk: Block,
+    pub ret_type: Type,
+    pub name: String,
+    pub args: Vec<ArgDecl>,
+    pub blk: Block,
 }
 
 #[derive(Debug, Clone)]
@@ -82,13 +82,13 @@ pub enum Type {
 
 #[derive(Debug, Clone)]
 pub struct ArgDecl {
-    typ: Type,
-    name: String,
+    pub r#type: Type,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    stmts: Vec<Statement>,
+    pub stmts: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,11 +170,11 @@ pub enum Expr {
 }
 
 #[derive(Debug)]
-pub struct LangParser<'a, Iter: Iterator<Item = Token>> {
+pub struct UmaParser<'a, Iter: Iterator<Item = Token>> {
     tokens: Peekable<&'a mut Iter>,
 }
 
-impl<'a, I: Iterator<Item = Token>> LangParser<'a, I> {
+impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     pub fn new(tokens: &'a mut I) -> Self {
         Self {
             tokens: tokens.peekable(),
@@ -216,9 +216,9 @@ impl<'a, I: Iterator<Item = Token>> LangParser<'a, I> {
         }])
     }
 
-    pub fn program(&mut self) -> ParseResult<Program> {
+    pub fn source_file(&mut self) -> ParseResult<SourceFile> {
         let funcs = self.funcs()?;
-        Ok(Program { funcs })
+        Ok(SourceFile { funcs })
     }
 
     fn funcs(&mut self) -> ParseResult<Vec<Func>> {
@@ -284,7 +284,7 @@ impl<'a, I: Iterator<Item = Token>> LangParser<'a, I> {
             unreachable!()
         };
 
-        Ok(ArgDecl { typ, name })
+        Ok(ArgDecl { r#type: typ, name })
     }
 
     fn block(&mut self) -> ParseResult<Block> {

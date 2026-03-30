@@ -1,12 +1,12 @@
 use std::{fs, io, ops::Range, path::Path, slice::SliceIndex};
 
 #[derive(Debug, Clone)]
-pub struct SourceFile {
+pub struct SourceText {
     contents: String,
     line_starts: Vec<usize>,
 }
 
-impl SourceFile {
+impl SourceText {
     pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
         let contents = fs::read_to_string(path.as_ref())?;
         Ok(Self::from_contents(contents))
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn test_source_file_line() {
-        let src = SourceFile::from_contents(String::from("hello\nworld\n!\n\nfoo"));
+        let src = SourceText::from_contents(String::from("hello\nworld\n!\n\nfoo"));
         assert_eq!(vec![0, 6, 12, 14, 15], src.line_starts);
 
         assert_eq!(0, src.find_line(0));

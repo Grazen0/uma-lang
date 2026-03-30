@@ -1,6 +1,6 @@
-mod codegen;
 mod core;
 mod parser;
+mod pretty;
 mod scanner;
 
 use std::ops::Range;
@@ -9,8 +9,8 @@ use clap::Parser;
 use crossterm::style::Stylize;
 
 use crate::{
-    core::SourceFile,
-    parser::{LangParser, ParseError},
+    core::SourceText,
+    parser::{ParseError, UmaParser},
     scanner::Scanner,
 };
 
@@ -22,23 +22,27 @@ fn digit_count(n: usize, radix: u32) -> usize {
 struct Args {
     /// Input file
     input: String,
+
+    /// Output the file formatted
+    #[arg(short, long)]
+    format: bool,
 }
 
-fn print_error_header(src: &SourceFile, err: &ParseError) {
+fn print_error_header(src: &SourceText, err: &ParseError) {
     eprintln!(
         "{}",
         format!("{}: {}", "error".red(), err.fmt_with_src(src.contents())).bold()
     );
 }
 
-fn compute_err_byte_range(src: &SourceFile, err: &ParseError) -> Range<usize> {
+fn compute_err_byte_range(src: &SourceText, err: &ParseError) -> Range<usize> {
     err.byte_range().unwrap_or_else(|| {
         let end = src.contents().len();
         end - 1..end
     })
 }
 
-fn print_src_line(src: &SourceFile, line: usize, col_pad: usize) {
+fn print_src_line(src: &SourceText, line: usize, col_pad: usize) {
     let line_range = src.line_range_bytes(line);
     let line_str = &src.contents()[line_range.start..line_range.end - 1];
 
@@ -46,7 +50,7 @@ fn print_src_line(src: &SourceFile, line: usize, col_pad: usize) {
     eprintln!("{}", line_str);
 }
 
-fn print_underline(src: &SourceFile, line: usize, byte_range: &Range<usize>, col_pad: usize) {
+fn print_underline(src: &SourceText, line: usize, byte_range: &Range<usize>, col_pad: usize) {
     let line_range = src.line_range_bytes(line);
 
     let under_start = line_range.start.max(byte_range.start);
@@ -68,7 +72,7 @@ fn print_signcolumn(col_pad: usize, num: Option<usize>) {
 
 fn print_location_line(
     src_path: &str,
-    src: &SourceFile,
+    src: &SourceText,
     start_line: usize,
     byte_start: usize,
     col_pad: usize,
@@ -89,7 +93,7 @@ fn print_row_separator(col_pad: usize) {
     eprintln!("{:col_pad$} {}", "", "|".bold().blue());
 }
 
-fn print_parse_error(src_path: &str, src: &SourceFile, err: &ParseError) {
+fn print_parse_error(src_path: &str, src: &SourceText, err: &ParseError) {
     let byte_range = compute_err_byte_range(src, err);
 
     let start_line = src.find_line(byte_range.start);
@@ -109,12 +113,12 @@ fn print_parse_error(src_path: &str, src: &SourceFile, err: &ParseError) {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let src = SourceFile::from_path(&args.input)?;
+    let src = SourceText::from_path(&args.input)?;
 
     let mut scanner = Scanner::new(src.contents());
-    let mut parser = LangParser::new(&mut scanner);
+    let mut parser = UmaParser::new(&mut scanner);
 
-    let program = parser.program().unwrap_or_else(|errors| {
+    let source_file = parser.source_file().unwrap_or_else(|errors| {
         for e in errors {
             print_parse_error(&args.input, &src, &e);
         }
@@ -122,7 +126,8 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     });
 
-    println!("parse successful");
-    // println!("{:#?}", program);
+    if args.format {
+        println!("{}", source_file.pretty_print());
+    }
     Ok(())
 }
