@@ -1,4 +1,4 @@
-use std::{fs, io, ops::Range, path::Path};
+use std::{fs, io, ops::Range, path::Path, slice::SliceIndex};
 
 #[derive(Debug, Clone)]
 pub struct SourceFile {
@@ -15,8 +15,8 @@ impl SourceFile {
     fn from_contents(contents: String) -> Self {
         let mut line_positions = vec![0];
 
-        for (i, ch) in contents.bytes().enumerate() {
-            if ch == b'\n' {
+        for (i, ch) in contents.char_indices() {
+            if ch == '\n' {
                 line_positions.push(i + 1);
             }
         }
@@ -29,6 +29,10 @@ impl SourceFile {
 
     pub fn contents(&self) -> &str {
         &self.contents
+    }
+
+    pub fn count_chars(&self, range: impl SliceIndex<str, Output = str>) -> usize {
+        self.contents[range].chars().count()
     }
 
     pub fn find_line(&self, byte_pos: usize) -> usize {

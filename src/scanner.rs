@@ -10,6 +10,7 @@ pub struct Token {
 }
 
 #[derive(Kinded, Debug, Clone, PartialEq)]
+#[kinded(kind = TokenKind)]
 pub enum TokenValue {
     #[kinded(rename = "'('")]
     LParen,
