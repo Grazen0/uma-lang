@@ -26,8 +26,6 @@ pub enum ParseError {
     ExpectedExpression { found: Option<Token> },
     #[display("expected type")]
     ExpectedType { found: Option<Token> },
-    #[display("expected end-of-file")]
-    ExpectedEof { found: Token },
 }
 
 impl ParseError {
@@ -44,10 +42,6 @@ impl ParseError {
                 let found_str = fmt_opt_token(found.as_ref(), src);
                 format!("{e}, found {found_str}")
             }
-            e @ Self::ExpectedEof { found } => {
-                let found_str = fmt_opt_token(Some(found), src);
-                format!("{e}, found {found_str}")
-            }
         }
     }
 }
@@ -59,7 +53,6 @@ impl ParseError {
             Self::ExpectedExpression { found } | Self::ExpectedType { found } => {
                 found.as_ref().map(|t| t.byte_range.clone())
             }
-            Self::ExpectedEof { found } => Some(found.byte_range.clone()),
         }
     }
 }
@@ -221,14 +214,6 @@ impl<'a, I: Iterator<Item = Token>> LangParser<'a, I> {
             expected: Some(kind),
             found: peek.cloned(),
         }])
-    }
-
-    fn skip_until(&mut self, pred: impl Fn(TokenValue) -> bool) {
-        while let Some(tok) = self.tokens.next() {
-            if pred(tok.val) {
-                break;
-            }
-        }
     }
 
     pub fn program(&mut self) -> ParseResult<Program> {
