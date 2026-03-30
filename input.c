@@ -1,29 +1,14 @@
-int main() {
-  printf("Hello, world!\n");
-  a = true ? a ? b : c : nullptr;
-  break;
-  break;
-  0b1010 + 0x10, 0001;
-  continue;
+int fib(int n) {
+  if (n <= 1)
+    return n;
+
+  return fib(n - 1) + fib(n - (2 - 5));
 }
 
-int fib(int n) {
-  if (n <= 1) {
-    return n;
+int main() {
+  fib("fib(6) = %d\n", fib(6));
+  {
+    fib("fib(6) = %d\n", fib(6));
   }
-
-  foo = 2, 3, (sizeof(thing < -1));
-
-  do
-    printf("Hello, world!\n");
-  while (fib(n) + 2);
-
-  if (false && 1)
-    if (hello)
-      printf("what\r");
-    else
-      &***foo = -4 + sizeof(3);
-
-  return fib(n - 1) + fib(n - 2);
-  return 2.43 + 21 + 34.;
+  return 0;
 }
