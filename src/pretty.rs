@@ -1,4 +1,7 @@
-use crate::parser::{ArgDecl, BinOp, Block, Expr, Func, Rel, SourceFile, Statement, Type, UnaryOp};
+use crate::parser::{
+    ArgDecl, BinOp, Block, Expr, Func, Rel, SourceFile, Statement, TopDecl, Type, Typedef, UnaryOp,
+    VarDecl, VarDeclList,
+};
 
 const SHIFT_WIDTH: usize = 4;
 
@@ -6,18 +9,33 @@ impl SourceFile {
     pub fn pretty_print(&self) -> String {
         let mut out = String::new();
 
-        let mut iter = self.funcs.iter();
+        let mut iter = self.decls.iter();
 
-        if let Some(func) = iter.next() {
-            out.push_str(&func.pretty_print());
+        if let Some(decl) = iter.next() {
+            out.push_str(&decl.pretty_print());
         }
 
-        for func in iter {
+        for decl in iter {
             out.push('\n');
-            out.push_str(&func.pretty_print());
+            out.push_str(&decl.pretty_print());
         }
 
         out
+    }
+}
+
+impl TopDecl {
+    pub fn pretty_print(&self) -> String {
+        match self {
+            Self::Typedef(typedef) => typedef.pretty_print(),
+            Self::Func(func) => func.pretty_print(),
+        }
+    }
+}
+
+impl Typedef {
+    pub fn pretty_print(&self) -> String {
+        format!("typedef {} {};", self.r#type.pretty_print(), self.name)
     }
 }
 
@@ -48,6 +66,7 @@ impl Type {
         match self {
             Self::Void => "void".to_string(),
             Self::Int => "int".to_string(),
+            Self::Float => "float".to_string(),
             Self::Bool => "bool".to_string(),
             Self::UserDef(name) => name.clone(),
         }
@@ -103,6 +122,30 @@ impl Statement {
                     stmt.pretty_print(indent + 1)
                 ),
             },
+            Self::VarDecl(decl) => format!("{:space$}{}", "", decl.pretty_print()),
+        }
+    }
+}
+
+impl VarDeclList {
+    pub fn pretty_print(&self) -> String {
+        format!(
+            "{} {};",
+            self.r#type.pretty_print(),
+            self.decls
+                .iter()
+                .map(VarDecl::pretty_print)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl VarDecl {
+    pub fn pretty_print(&self) -> String {
+        match &self.init {
+            Some(expr) => format!("{} = {}", self.name, expr.pretty_print()),
+            None => self.name.clone(),
         }
     }
 }
@@ -110,7 +153,7 @@ impl Statement {
 impl Expr {
     pub fn pretty_print(&self) -> String {
         match self {
-            Self::Assign { src, dst } => format!("{} = {}", src.pretty_print(), dst.pretty_print()),
+            Self::Assign { src, dst } => format!("{} = {}", dst.pretty_print(), src.pretty_print()),
             Self::Rel(rel, lhs, rhs) => {
                 format!(
                     "({}) {} ({})",
@@ -196,6 +239,7 @@ impl UnaryOp {
             Self::Addr => "&".to_string(),
             Self::Deref => "*".to_string(),
             Self::Sizeof => "sizeof ".to_string(),
+            Self::TypeCast(r#type) => format!("({})", r#type.pretty_print()),
         }
     }
 }

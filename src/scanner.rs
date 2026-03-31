@@ -38,6 +38,8 @@ pub enum TokenValue {
     BoolOr,
     #[kinded(rename = "'|'")]
     BitOr,
+    #[kinded(rename = "'^'")]
+    BitXor,
     #[kinded(rename = "'&&'")]
     BoolAnd,
     #[kinded(rename = "'&'")]
@@ -220,6 +222,7 @@ impl<'a> Scanner<'a> {
                     TokenValue::Ampersand
                 }
             }
+            '^' => TokenValue::BitXor,
             '<' => {
                 if self.accept_char('=') {
                     TokenValue::Leq

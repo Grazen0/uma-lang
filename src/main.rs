@@ -118,16 +118,20 @@ fn main() -> anyhow::Result<()> {
     let mut scanner = Scanner::new(src.contents());
     let mut parser = UmaParser::new(&mut scanner);
 
-    let source_file = parser.source_file().unwrap_or_else(|errors| {
-        for e in errors {
-            print_parse_error(&args.input, &src, &e);
-        }
+    let source_file = match parser.source_file() {
+        Ok(file) => file,
+        Err(errors) => {
+            for e in errors {
+                print_parse_error(&args.input, &src, &e);
+            }
 
-        std::process::exit(1);
-    });
+            std::process::exit(1);
+        }
+    };
 
     if args.format {
         println!("{}", source_file.pretty_print());
     }
+
     Ok(())
 }

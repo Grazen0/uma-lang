@@ -1,49 +1,59 @@
-source_file -> funcs
+source_file ::= {top_decl}* ;
 
-funcs -> {func}*
-func  -> type IDEN "(" {param_decls} ")" block
+type ::= "void" | "int" | "bool" | TYPE_NAME ;
 
-param_decls -> param_decl {"," param_decl}*
-param_decl -> type IDEN
+typedef ::= "typedef" type IDEN ";" ;
+var_decl ::= type IDEN ";" ;
 
-block -> "{" {stmt}* "}"
+top_decl ::= func_decl
+          | typedef
+          | var_decl ;
 
-stmt -> "if" "(" expr ")" stmt {"else" stmt}
-      | "while" "(" expr ")" stmt
-      | "do" stmt "while" "(" expr ")" ";"
-      | "for" "(" expr ";" expr ";" expr ")" stmt
-      | "return" expr ";"
-      | "continue" ";"
-      | "break" ";"
-      | type IDEN "=" expr {"," IDEN "=" expr} ";"
-      | block
-      | expr ";"
+func_decl  ::= type IDEN "(" {param_decls} ")" block ;
 
-type -> "void" | "int" | "bool" | IDEN
+param_decls ::= param_decl {"," param_decl}* ;
+param_decl ::= type IDEN ;
 
-expr        -> comma_expr
-comma_expr  -> {comma_expr ","} assign_expr
-assign_expr -> ter_expr {"=" assign_expr}
-ter_expr    -> or_expr {"?" expr ":" ter_expr}
-or_expr     -> {or_expr "||"} and_expr
-and_expr    -> {and_expr "&&"} eq_expr 
-eq_expr     -> {eq_expr ("=="|"!=")} ineq_expr 
-ineq_expr   -> {ineq_expr ("<"|"<="|">"|">=")} add_expr 
-add_expr    -> {add_expr ("+"|"-")} mul_expr 
-mul_expr    -> {mul_expr ("*"|"/"|"%")} unary_expr
-unary_expr  -> ("+"|"-"|"!"|"&"|"*"|"sizeof") unary_expr
-             | access_expr
-access_expr -> base_expr "(" {expr {"," expr}*} ")"
-             | base_expr "[" expr "]"
-             | base_expr
+block ::= "{" {stmt}* "}" ;
 
-base_expr -> "(" expr ")"
-           | IDEN
-           | NUM_LIT
-           | STR_LIT
-           | FLOAT_LIT
-           | "true"
-           | "false"
-           | "nullptr"
 
-struct_decl -> "struct" {IDEN} "{" {type IDEN ";"}* "}"
+stmt ::= "if" "(" expr ")" stmt {"else" stmt}
+         | "while" "(" expr ")" stmt
+         | "do" stmt "while" "(" expr ")" ";"
+         | "for" "(" expr ";" expr ";" expr ")" stmt
+         | "return" expr ";"
+         | "continue" ";"
+         | "break" ";"
+         | type {var_decl {"," var_decl}*} ";"
+         | block
+         | typedef
+         | expr ";" ;
+
+var_decl ::= IDEN {"=" ter_expr} ;
+
+expr        ::= comma_expr ;
+comma_expr  ::= {comma_expr ","} assign_expr ;
+assign_expr ::= ter_expr {"=" assign_expr} ;
+ter_expr    ::= or_expr {"?" expr ":" ter_expr} ;
+or_expr     ::= {or_expr "||"} and_expr ;
+and_expr    ::= {and_expr "&&"} eq_expr  ;
+eq_expr     ::= {eq_expr ("=="|"!=")} ineq_expr  ;
+ineq_expr   ::= {ineq_expr ("<"|"<="|">"|">=")} add_expr  ;
+add_expr    ::= {add_expr ("+"|"-")} mul_expr ;
+mul_expr    ::= {mul_expr ("*"|"/"|"%")} unary_expr ;
+unary_expr  ::= ("+"|"-"|"!"|"&"|"*"|"sizeof") unary_expr ;
+                | access_expr ;
+access_expr ::= base_expr "(" {expr {"," expr}*} ")" 
+                | base_expr "[" expr "]"
+                | base_expr ;
+
+base_expr ::= "(" expr ")"
+              | IDEN
+              | NUM_LIT
+              | STR_LIT
+              | FLOAT_LIT
+              | "true"
+              | "false"
+              | "nullptr" ;
+
+struct_decl ::= "struct" {IDEN} "{" {type IDEN ";"}* "}" ;
