@@ -1,11 +1,3 @@
-[package]
-name = "umacc"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-anyhow = "1.0.102"
-clap = { version = "4.6.0", features = ["derive"] }
-crossterm = "0.29.0"
-derive_more = { version = "2.1.1", features = ["display", "error", "is_variant"] }
-kinded = "0.5.0"
+[workspace]
+resolver = "3"
+members = ["uma-core","umacc", "umals"]

@@ -1,14 +1,9 @@
-mod core;
-mod parser;
-mod pretty;
-mod scanner;
-
 use std::ops::Range;
 
 use clap::Parser;
 use crossterm::style::Stylize;
 
-use crate::{
+use uma_core::{
     core::SourceText,
     parser::{ParseError, UmaParser},
     scanner::Scanner,
@@ -22,10 +17,6 @@ fn digit_count(n: usize, radix: u32) -> usize {
 struct Args {
     /// Input file
     input: String,
-
-    /// Output the file formatted
-    #[arg(short, long)]
-    format: bool,
 }
 
 fn print_error_header(src: &SourceText, err: &ParseError) {
@@ -113,6 +104,7 @@ fn print_parse_error(src_path: &str, src: &SourceText, err: &ParseError) {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
     let src = SourceText::from_path(&args.input)?;
 
     let mut scanner = Scanner::new(src.contents());
@@ -129,9 +121,6 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    if args.format {
-        println!("{}", source_file.pretty_print());
-    }
-
+    println!("AST: {:#?}", source_file);
     Ok(())
 }

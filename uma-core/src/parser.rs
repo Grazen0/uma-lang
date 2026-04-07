@@ -247,7 +247,7 @@ impl<'a> SymbolTable<'a> {
     }
 
     pub fn is_type(&self, iden: &str) -> bool {
-        self.get(iden).is_none_or(|kind| kind == SymbolKind::Type)
+        self.get(iden).is_some_and(|kind| kind == SymbolKind::Type)
     }
 }
 
@@ -303,6 +303,7 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         let mut decls = vec![];
         let mut sym_table = SymbolTable::default();
 
+        // FIX: this causes an infinite loop when parse errors are found
         while let Some(tok) = self.tokens.peek() {
             match tok.val.kind() {
                 TokenKind::Typedef => match self.typedef(&mut sym_table) {

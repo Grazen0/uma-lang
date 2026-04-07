@@ -3,6 +3,10 @@ use std::{iter::Peekable, num::IntErrorKind, ops::Range, str::CharIndices};
 use derive_more::Display;
 use kinded::Kinded;
 
+pub fn is_alphanumeric_extended(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
 #[derive(Debug, Clone)]
 pub struct Token {
     pub byte_range: Range<usize>,
@@ -181,6 +185,10 @@ impl<'a> Scanner<'a> {
             '+' => TokenValue::Add,
             '-' => TokenValue::Sub,
             '*' => TokenValue::Asterisk,
+            '#' => {
+                while self.next_char().is_some_and(|ch| ch != '\n') {}
+                return self.next_token();
+            }
             '/' => {
                 if self.accept_char('/') {
                     while self.next_char().is_some_and(|ch| ch != '\n') {}
@@ -327,10 +335,10 @@ impl<'a> Scanner<'a> {
                     })
                 }
             }
-            ch if ch.is_alphanumeric() => {
+            ch if is_alphanumeric_extended(ch) => {
                 let mut iden = String::from(ch);
 
-                while let Some(ch) = self.accept(|ch| ch.is_alphanumeric()) {
+                while let Some(ch) = self.accept(is_alphanumeric_extended) {
                     iden.push(ch);
                 }
 
