@@ -1,4 +1,4 @@
-source_file ::= {top_decl}* ;
+translation_unit ::= {top_decl}* ;
 
 type ::= "void" | "int" | "bool" | TYPE_NAME ;
 

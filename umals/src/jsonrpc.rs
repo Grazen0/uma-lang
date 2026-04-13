@@ -4,7 +4,7 @@ pub const VERSION: &str = "2.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IncomingMessage<P> {
+pub struct Request<P> {
     pub jsonrpc: String,
     pub method: String,
     pub id: Option<i32>,

@@ -1,18 +1,92 @@
+use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
+
+use crate::jsonrpc::{self, ResponseError};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase")]
+pub enum RequestError {
+    ParseError,
+    InvalidRequest,
+    MethodNotFound,
+    InvalidParams,
+    InternalError,
+
+    ServerNotInitialized,
+    UnknownErrorCode,
+
+    RequestFailed,
+    ServerCancelled,
+    ContentModified,
+    RequestCancelled,
+    InitializeError { retry: bool },
+}
+
+impl RequestError {
+    fn code(&self) -> i32 {
+        match self {
+            Self::ParseError => jsonrpc::error::PARSE_ERROR,
+            Self::InvalidRequest => jsonrpc::error::INVALID_REQUEST,
+            Self::MethodNotFound => jsonrpc::error::METHOD_NOT_FOUND,
+            Self::InvalidParams => jsonrpc::error::INVALID_PARAMS,
+            Self::InternalError => jsonrpc::error::INTERNAL_ERROR,
+
+            Self::ServerNotInitialized => -32002,
+            Self::UnknownErrorCode => -32001,
+
+            Self::RequestFailed => -32803,
+            Self::ServerCancelled => -32802,
+            Self::ContentModified => -32801,
+            Self::RequestCancelled => -32800,
+
+            Self::InitializeError { .. } => 1,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::ParseError => "parse error".to_string(),
+            Self::InvalidRequest => "invalid request".to_string(),
+            Self::MethodNotFound => "method not found".to_string(),
+            Self::InvalidParams => "invalid params".to_string(),
+            Self::InternalError => "internal error".to_string(),
+
+            Self::ServerNotInitialized => "server not initialized".to_string(),
+            Self::UnknownErrorCode => "unknown error code".to_string(),
+
+            Self::RequestFailed => "request failed".to_string(),
+            Self::ServerCancelled => "server cancelled".to_string(),
+            Self::ContentModified => "content modified".to_string(),
+            Self::RequestCancelled => "request cancelled".to_string(),
+
+            Self::InitializeError { .. } => "initialize error".to_string(),
+        }
+    }
+
+    pub fn into_response_error(self) -> ResponseError<Option<RequestError>> {
+        ResponseError {
+            code: self.code(),
+            message: self.message(),
+            data: Some(self),
+        }
+    }
+}
+
+pub type RequestHandlerResult = Result<RequestResult, RequestError>;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
-    text_document: Option<TextDocumentClientCapabilities>,
-    window: Option<WindowClientCapabilities>,
-    general: Option<GeneralClientCapabilities>,
+    pub text_document: Option<TextDocumentClientCapabilities>,
+    pub window: Option<WindowClientCapabilities>,
+    pub general: Option<GeneralClientCapabilities>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextDocumentClientCapabilities {
-    publish_diagnostics: Option<PublishDiagnosticsClientCapabilities>,
+    pub publish_diagnostics: Option<PublishDiagnosticsClientCapabilities>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -22,7 +96,7 @@ pub struct PublishDiagnosticsClientCapabilities {}
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowClientCapabilities {
-    show_message: Option<ShowMessageRequestClientCapabilities>,
+    pub show_message: Option<ShowMessageRequestClientCapabilities>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -32,14 +106,14 @@ pub struct ShowMessageRequestClientCapabilities {}
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralClientCapabilities {
-    position_encodings: Vec<PositionEncodingKind>,
+    pub position_encodings: Vec<PositionEncodingKind>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
-    process_id: Option<i32>,
-    capabilities: ClientCapabilities,
+    pub process_id: Option<i32>,
+    pub capabilities: ClientCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, Serialize_repr)]
@@ -50,18 +124,24 @@ pub enum TextDocumentSyncKind {
     Incremental = 2,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Constructor, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
-    line: u32,
-    character: u32,
+    pub line: u32,
+    pub character: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl From<(usize, usize)> for Position {
+    fn from((line, col): (usize, usize)) -> Self {
+        Self::new(line as u32, col as u32)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Constructor, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Range {
-    start: Position,
-    end: Position,
+    pub start: Position,
+    pub end: Position,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +157,7 @@ pub enum PositionEncodingKind {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
+    pub position_encoding: Option<PositionEncodingKind>,
     pub text_document_sync: Option<TextDocumentSyncKind>,
 }
 
@@ -179,13 +260,15 @@ pub enum OutNotification {
     #[serde(rename = "window/showMessage")]
     ShowMessage { params: ShowMessageParams },
     #[serde(rename = "textDocument/publishDiagnostics")]
-    PublishDiagnostics { params: ShowMessageParams },
+    PublishDiagnostics { params: PublishDiagnosticsParams },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializeError {
-    pub retry: bool,
+pub struct PublishDiagnosticsParams {
+    pub uri: String,
+    pub version: Option<i32>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -194,7 +277,7 @@ pub struct InitializedParams {}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged, rename_all = "camelCase")]
-pub enum ResponseResult {
+pub enum RequestResult {
     Initialize { capabilities: ServerCapabilities },
     Shutdown,
 }

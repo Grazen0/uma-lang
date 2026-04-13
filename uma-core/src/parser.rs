@@ -1,5 +1,6 @@
 use crate::scanner::{Token, TokenKind, TokenValue};
 use derive_more::{Display, Error};
+use kinded::Kinded;
 use std::{collections::HashMap, iter::Peekable, ops::Range};
 
 fn fmt_opt_token(tok: Option<&Token>, src: &str) -> String {
@@ -23,6 +24,12 @@ fn is_token_type(tok: &Token, sym_table: &SymbolTable<'_>) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolRedeclaration {
+    SameKind,
+    DifferentKind,
+}
+
 #[derive(Debug, Clone, Error, Display)]
 pub enum ParseError {
     #[display("unexpected token")]
@@ -35,7 +42,12 @@ pub enum ParseError {
     #[display("expected type")]
     ExpectedType { found: Option<Token> },
     #[display("symbol redeclaration")]
-    SymbolRedeclaration(#[error(ignore)] Token),
+    SymbolRedeclaration {
+        token: Token,
+        kind: SymbolRedeclaration,
+    },
+    #[display("unknown type name")]
+    UnknownTypeName(#[error(ignore)] Token),
 }
 
 impl ParseError {
@@ -56,9 +68,20 @@ impl ParseError {
                 let found_str = fmt_opt_token(found.as_ref(), src);
                 format!("expected type, found {found_str}")
             }
-            Self::SymbolRedeclaration(iden) => {
-                let found_str = fmt_opt_token(Some(iden), src);
-                format!("{found_str} redeclared as different kind of symbol",)
+            Self::SymbolRedeclaration { token, kind } => {
+                let found_str = fmt_opt_token(Some(token), src);
+
+                match kind {
+                    SymbolRedeclaration::SameKind => format!("{found_str} redeclared"),
+                    SymbolRedeclaration::DifferentKind => {
+                        format!("{found_str} redeclared as different kind of symbol")
+                    }
+                }
+            }
+
+            Self::UnknownTypeName(token) => {
+                let tok_str = fmt_opt_token(Some(token), src);
+                format!("unknown type name {tok_str}")
             }
         }
     }
@@ -71,7 +94,8 @@ impl ParseError {
             Self::ExpectedExpression { found } | Self::ExpectedType { found } => {
                 found.as_ref().map(|t| t.byte_range.clone())
             }
-            Self::SymbolRedeclaration(tok) => Some(tok.byte_range.clone()),
+            Self::SymbolRedeclaration { token, .. } => Some(token.byte_range.clone()),
+            Self::UnknownTypeName(token) => Some(token.byte_range.clone()),
         }
     }
 }
@@ -79,7 +103,7 @@ impl ParseError {
 pub type ParseResult<T> = Result<T, Vec<ParseError>>;
 
 #[derive(Debug, Clone)]
-pub struct SourceFile {
+pub struct TranslationUnit {
     pub decls: Vec<TopDecl>,
 }
 
@@ -94,7 +118,7 @@ pub struct Func {
     pub ret_type: Type,
     pub name: String,
     pub args: Vec<ArgDecl>,
-    pub blk: Block,
+    pub blk: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,11 +134,6 @@ pub enum Type {
 pub struct ArgDecl {
     pub r#type: Type,
     pub name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct Block {
-    pub stmts: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +156,7 @@ pub struct VarDecl {
 
 #[derive(Debug, Clone)]
 pub enum Statement {
+    Empty,
     If {
         cond: Expr,
         stmt: Box<Statement>,
@@ -153,7 +173,7 @@ pub enum Statement {
     Return(Expr),
     Continue,
     Break,
-    Block(Block),
+    Block(Vec<Statement>),
     Expr(Expr),
     VarDecl(VarDeclList),
 }
@@ -215,15 +235,16 @@ pub enum Expr {
     Nullptr,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SymbolKind {
+#[derive(Debug, Clone, Kinded)]
+pub enum Symbol {
     Type,
-    Var,
+    Var(Type),
+    Func { ret_type: Type, args: Vec<Type> },
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct SymbolTable<'a> {
-    map: HashMap<String, SymbolKind>,
+    map: HashMap<String, Symbol>,
     next: Option<&'a SymbolTable<'a>>,
 }
 
@@ -235,19 +256,28 @@ impl<'a> SymbolTable<'a> {
         }
     }
 
-    pub fn insert(&mut self, iden: String, kind: SymbolKind) -> bool {
-        self.map.insert(iden, kind).is_none()
+    pub fn insert(&mut self, iden: String, kind: Symbol) -> Result<(), SymbolRedeclaration> {
+        if let Some(other_sym) = self.map.get(&iden) {
+            return Err(if kind.kind() == other_sym.kind() {
+                SymbolRedeclaration::SameKind
+            } else {
+                SymbolRedeclaration::DifferentKind
+            });
+        }
+
+        self.map.insert(iden, kind);
+        Ok(())
     }
 
-    pub fn get(&self, iden: &str) -> Option<SymbolKind> {
+    pub fn get(&self, iden: &str) -> Option<&Symbol> {
         self.map
             .get(iden)
-            .copied()
             .or_else(|| self.next.and_then(|next| next.get(iden)))
     }
 
     pub fn is_type(&self, iden: &str) -> bool {
-        self.get(iden).is_some_and(|kind| kind == SymbolKind::Type)
+        self.get(iden)
+            .is_some_and(|kind| kind.kind() == SymbolKind::Type)
     }
 }
 
@@ -298,26 +328,43 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         }])
     }
 
-    pub fn source_file(&mut self) -> ParseResult<SourceFile> {
+    pub fn translation_unit(&mut self) -> ParseResult<TranslationUnit> {
         let mut errors = vec![];
         let mut decls = vec![];
         let mut sym_table = SymbolTable::default();
 
-        // FIX: this causes an infinite loop when parse errors are found
+        // FIX: standardize panic-mode recovery procedures
+
         while let Some(tok) = self.tokens.peek() {
             match tok.val.kind() {
                 TokenKind::Typedef => match self.typedef(&mut sym_table) {
                     Ok(typedef) => decls.push(TopDecl::Typedef(typedef)),
-                    Err(mut e) => errors.append(&mut e),
+                    Err(mut e) => {
+                        while self
+                            .tokens
+                            .next()
+                            .is_some_and(|tok| tok.val.kind() != TokenKind::Semi)
+                        {
+                        }
+                        errors.append(&mut e);
+                    }
                 },
                 _ => match self.func_decl(&mut sym_table) {
                     Ok(func) => decls.push(TopDecl::Func(func)),
-                    Err(mut e) => errors.append(&mut e),
+                    Err(mut e) => {
+                        while self
+                            .tokens
+                            .next()
+                            .is_some_and(|tok| tok.val.kind() != TokenKind::RBrace)
+                        {
+                        }
+                        errors.append(&mut e);
+                    }
                 },
             }
         }
 
-        make_parse_result(SourceFile { decls }, errors)
+        make_parse_result(TranslationUnit { decls }, errors)
     }
 
     fn typedef(&mut self, sym_table: &mut SymbolTable<'_>) -> ParseResult<Typedef> {
@@ -325,16 +372,16 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
 
         let r#type = self.r#type(sym_table)?;
 
-        let name_tok = self.expect_kind(TokenKind::Iden)?;
-        let TokenValue::Iden(name) = name_tok.val.clone() else {
+        let token = self.expect_kind(TokenKind::Iden)?;
+        let TokenValue::Iden(name) = token.val.clone() else {
             unreachable!()
         };
 
         self.expect_kind(TokenKind::Semi)?;
 
-        if !sym_table.insert(name.clone(), SymbolKind::Type) {
-            return Err(vec![ParseError::SymbolRedeclaration(name_tok)]);
-        }
+        sym_table
+            .insert(name.clone(), Symbol::Type)
+            .map_err(|kind| vec![ParseError::SymbolRedeclaration { token, kind }])?;
 
         Ok(Typedef { r#type, name })
     }
@@ -343,14 +390,20 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         let mut errors = vec![];
         let ret_type = self.r#type(sym_table)?;
 
-        let name_tok = self.expect_kind(TokenKind::Iden)?;
-        let TokenValue::Iden(name) = name_tok.val.clone() else {
+        let token = self.expect_kind(TokenKind::Iden)?;
+        let TokenValue::Iden(name) = token.val.clone() else {
             unreachable!()
         };
 
-        if !sym_table.insert(name.clone(), SymbolKind::Var) {
-            errors.push(ParseError::SymbolRedeclaration(name_tok));
-        }
+        sym_table
+            .insert(
+                name.clone(),
+                Symbol::Func {
+                    ret_type: ret_type.clone(),
+                    args: vec![],
+                },
+            )
+            .map_err(|kind| vec![ParseError::SymbolRedeclaration { token, kind }])?;
 
         self.expect_kind(TokenKind::LParen)?;
 
@@ -395,15 +448,15 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
             Ok(Type::Float)
         } else if self.accept_kind_discard(TokenKind::Bool) {
             Ok(Type::Bool)
-        } else if let Some(tok) = self.accept_kind(TokenKind::Iden) {
-            let TokenValue::Iden(name) = &tok.val else {
+        } else if let Some(token) = self.accept_kind(TokenKind::Iden) {
+            let TokenValue::Iden(name) = &token.val else {
                 unreachable!()
             };
 
             if sym_table.is_type(name) {
                 Ok(Type::UserDef(name.clone()))
             } else {
-                Err(vec![ParseError::SymbolRedeclaration(tok)])
+                Err(vec![ParseError::UnknownTypeName(token)])
             }
         } else {
             Err(vec![ParseError::ExpectedType { found: tok }])
@@ -419,7 +472,7 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         Ok(ArgDecl { r#type, name })
     }
 
-    fn block(&mut self, sym_table: &SymbolTable<'_>) -> ParseResult<Block> {
+    fn block(&mut self, sym_table: &SymbolTable<'_>) -> ParseResult<Vec<Statement>> {
         self.expect_kind(TokenKind::LBrace)?;
 
         let mut errors = vec![];
@@ -427,11 +480,7 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
 
         let mut sym_table = SymbolTable::from_next(sym_table);
 
-        while self
-            .tokens
-            .peek()
-            .is_some_and(|t| t.val != TokenValue::RBrace)
-        {
+        while !self.accept_kind_discard(TokenKind::RBrace) {
             match self.stmt(&mut sym_table) {
                 Ok(stmt) => stmts.push(stmt),
                 Err(mut e) => {
@@ -446,8 +495,10 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
                             break;
                         }
 
-                        if let Some(tok) = self.tokens.next()
-                            && tok.val.kind() == TokenKind::Semi
+                        if self
+                            .tokens
+                            .next()
+                            .is_some_and(|tok| tok.val.kind() == TokenKind::Semi)
                         {
                             break;
                         }
@@ -456,22 +507,21 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
             }
         }
 
-        self.expect_kind(TokenKind::RBrace)?;
-        make_parse_result(Block { stmts }, errors)
+        make_parse_result(stmts, errors)
     }
 
     fn stmt(&mut self, sym_table: &mut SymbolTable<'_>) -> ParseResult<Statement> {
-        while self.accept_kind_discard(TokenKind::Semi) {}
-
-        if self.accept_kind_discard(TokenKind::If) {
+        if self.accept_kind_discard(TokenKind::Semi) {
+            Ok(Statement::Empty)
+        } else if self.accept_kind_discard(TokenKind::If) {
             self.expect_kind(TokenKind::LParen)?;
             let cond = self.expr(sym_table)?;
             self.expect_kind(TokenKind::RParen)?;
             let stmt = self.stmt(sym_table)?;
 
             let else_stmt = self
-                .accept_kind(TokenKind::Else)
-                .map(|_| self.stmt(sym_table))
+                .accept_kind_discard(TokenKind::Else)
+                .then(|| self.stmt(sym_table))
                 .transpose()?;
 
             Ok(Statement::If {
@@ -531,22 +581,22 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         let mut decls = vec![];
         let r#type = self.r#type(sym_table)?;
 
-        let decl = self.var_decl(sym_table)?;
+        let decl = self.var_decl(&r#type, sym_table)?;
         decls.push(decl);
 
         while !self.accept_kind_discard(TokenKind::Semi) {
-            self.accept_kind_discard(TokenKind::Comma);
+            self.expect_kind(TokenKind::Comma)?;
 
-            let decl = self.var_decl(sym_table)?;
+            let decl = self.var_decl(&r#type, sym_table)?;
             decls.push(decl);
         }
 
         Ok(VarDeclList { r#type, decls })
     }
 
-    fn var_decl(&mut self, sym_table: &mut SymbolTable<'_>) -> ParseResult<VarDecl> {
-        let name_tok = self.expect_kind(TokenKind::Iden)?;
-        let TokenValue::Iden(name) = name_tok.val.clone() else {
+    fn var_decl(&mut self, r#type: &Type, sym_table: &mut SymbolTable<'_>) -> ParseResult<VarDecl> {
+        let token = self.expect_kind(TokenKind::Iden)?;
+        let TokenValue::Iden(name) = token.val.clone() else {
             unreachable!()
         };
 
@@ -555,9 +605,9 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
             .then(|| self.var_init(sym_table))
             .transpose()?;
 
-        if !sym_table.insert(name.clone(), SymbolKind::Var) {
-            return Err(vec![ParseError::SymbolRedeclaration(name_tok)]);
-        }
+        sym_table
+            .insert(name.clone(), Symbol::Var(r#type.clone()))
+            .map_err(|kind| vec![ParseError::SymbolRedeclaration { token, kind }])?;
 
         Ok(VarDecl { name, init })
     }
