@@ -30,14 +30,24 @@ pub enum TokenValue {
     RBracket,
     #[kinded(rename = "'+'")]
     Add,
+    #[kinded(rename = "'+='")]
+    AddAssign,
     #[kinded(rename = "'-'")]
     Sub,
+    #[kinded(rename = "'-='")]
+    SubAssign,
     #[kinded(rename = "'*'")]
-    Asterisk,
+    Mul,
+    #[kinded(rename = "'*='")]
+    MulAssign,
     #[kinded(rename = "'/'")]
     Div,
+    #[kinded(rename = "'/='")]
+    DivAssign,
     #[kinded(rename = "'%'")]
     Mod,
+    #[kinded(rename = "'%='")]
+    ModAssign,
     #[kinded(rename = "'||'")]
     BoolOr,
     #[kinded(rename = "'|'")]
@@ -78,8 +88,8 @@ pub enum TokenValue {
     Else,
     #[kinded(rename = "'while'")]
     While,
-    #[kinded(rename = "'do'")]
-    Do,
+    #[kinded(rename = "'loop'")]
+    Loop,
     #[kinded(rename = "'for'")]
     For,
     #[kinded(rename = "'return'")]
@@ -88,38 +98,40 @@ pub enum TokenValue {
     Continue,
     #[kinded(rename = "'break'")]
     Break,
-    #[kinded(rename = "'void'")]
-    Void,
-    #[kinded(rename = "'int'")]
-    Int,
-    #[kinded(rename = "'float'")]
-    Float,
-    #[kinded(rename = "'bool'")]
-    Bool,
     #[kinded(rename = "'true'")]
     True,
     #[kinded(rename = "'false'")]
     False,
-    #[kinded(rename = "'nullptr'")]
-    Nullptr,
-    #[kinded(rename = "'sizeof'")]
-    Sizeof,
-    #[kinded(rename = "'struct'")]
-    Struct,
-    #[kinded(rename = "'enum'")]
-    Enum,
-    #[kinded(rename = "'typedef'")]
-    Typedef,
     #[kinded(rename = "numeric literal")]
     NumLit(u32),
-    #[kinded(rename = "float literal")]
-    FloatLit(f64),
     #[kinded(rename = "string literal")]
     StrLit(String),
     #[kinded(rename = "identifier")]
     Iden(String),
     #[kinded(rename = "error")]
     Error(ScanErrorValue),
+    #[kinded(rename = "'print'")]
+    Print,
+    #[kinded(rename = "'fn'")]
+    Fn,
+    #[kinded(rename = "'null'")]
+    Null,
+}
+
+impl TokenValue {
+    pub fn into_num(self) -> u32 {
+        match self {
+            Self::NumLit(n) => n,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn into_str(self) -> String {
+        match self {
+            Self::StrLit(s) => s,
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Display, PartialEq, Eq)]
@@ -182,32 +194,45 @@ impl<'a> Scanner<'a> {
         let init_byte_pos = self.byte_pos;
 
         let val = match self.next_char()? {
-            '+' => TokenValue::Add,
-            '-' => TokenValue::Sub,
-            '*' => TokenValue::Asterisk,
             '#' => {
                 while self.next_char().is_some_and(|ch| ch != '\n') {}
                 return self.next_token();
             }
+            '+' => {
+                if self.accept_char('=') {
+                    TokenValue::AddAssign
+                } else {
+                    TokenValue::Add
+                }
+            }
+            '-' => {
+                if self.accept_char('=') {
+                    TokenValue::SubAssign
+                } else {
+                    TokenValue::Sub
+                }
+            }
+            '*' => {
+                if self.accept_char('=') {
+                    TokenValue::MulAssign
+                } else {
+                    TokenValue::Mul
+                }
+            }
             '/' => {
-                if self.accept_char('/') {
-                    while self.next_char().is_some_and(|ch| ch != '\n') {}
-                    return self.next_token();
-                } else if self.accept_char('*') {
-                    loop {
-                        let Some(ch) = self.next_char() else {
-                            break TokenValue::Error(ScanErrorValue::UnexpectedEof);
-                        };
-
-                        if ch == '*' && self.next_char().is_some_and(|ch| ch == '/') {
-                            return self.next_token();
-                        }
-                    }
+                if self.accept_char('=') {
+                    TokenValue::DivAssign
                 } else {
                     TokenValue::Div
                 }
             }
-            '%' => TokenValue::Mod,
+            '%' => {
+                if self.accept_char('=') {
+                    TokenValue::ModAssign
+                } else {
+                    TokenValue::Mod
+                }
+            }
             '(' => TokenValue::LParen,
             ')' => TokenValue::RParen,
             '{' => TokenValue::LBrace,
@@ -315,25 +340,13 @@ impl<'a> Scanner<'a> {
                     buf.push(ch);
                 }
 
-                if let Some(dot) = self.accept(|ch| ch == '.') {
-                    buf.push(dot);
-
-                    while let Some(ch) = self.accept(|ch| (ch).is_digit(radix)) {
-                        buf.push(ch);
+                buf.parse().map(TokenValue::NumLit).unwrap_or_else(|e| {
+                    if e.kind() == &IntErrorKind::PosOverflow {
+                        TokenValue::Error(ScanErrorValue::IntLitOverflow)
+                    } else {
+                        TokenValue::Error(ScanErrorValue::InvalidIntLit)
                     }
-
-                    buf.parse()
-                        .map(TokenValue::FloatLit)
-                        .unwrap_or_else(|_| TokenValue::Error(ScanErrorValue::InvalidFloatLit))
-                } else {
-                    buf.parse().map(TokenValue::NumLit).unwrap_or_else(|e| {
-                        if e.kind() == &IntErrorKind::PosOverflow {
-                            TokenValue::Error(ScanErrorValue::IntLitOverflow)
-                        } else {
-                            TokenValue::Error(ScanErrorValue::InvalidIntLit)
-                        }
-                    })
-                }
+                })
             }
             ch if is_alphanumeric_extended(ch) => {
                 let mut iden = String::from(ch);
@@ -346,22 +359,16 @@ impl<'a> Scanner<'a> {
                     "if" => TokenValue::If,
                     "else" => TokenValue::Else,
                     "while" => TokenValue::While,
-                    "do" => TokenValue::Do,
+                    "loop" => TokenValue::Loop,
                     "for" => TokenValue::For,
                     "return" => TokenValue::Return,
                     "continue" => TokenValue::Continue,
                     "break" => TokenValue::Break,
-                    "void" => TokenValue::Void,
-                    "int" => TokenValue::Int,
-                    "float" => TokenValue::Float,
-                    "bool" => TokenValue::Bool,
                     "true" => TokenValue::True,
                     "false" => TokenValue::False,
-                    "nullptr" => TokenValue::Nullptr,
-                    "sizeof" => TokenValue::Sizeof,
-                    "struct" => TokenValue::Struct,
-                    "enum" => TokenValue::Enum,
-                    "typedef" => TokenValue::Typedef,
+                    "print" => TokenValue::Print,
+                    "fn" => TokenValue::Fn,
+                    "null" => TokenValue::Null,
                     _ => TokenValue::Iden(iden),
                 }
             }

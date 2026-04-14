@@ -492,15 +492,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "uma-core"
-version = "0.1.0"
-dependencies = [
- "derive_more",
- "kinded",
-]
-
-[[package]]
-name = "umacc"
+name = "uma"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -512,6 +504,14 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "uma-core",
+]
+
+[[package]]
+name = "uma-core"
+version = "0.1.0"
+dependencies = [
+ "derive_more",
+ "kinded",
 ]
 
 [[package]]

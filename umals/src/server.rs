@@ -277,7 +277,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
         let mut scanner = Scanner::new(text.contents());
         let mut parser = UmaParser::new(&mut scanner);
 
-        let diagnostics = match parser.translation_unit() {
+        let diagnostics = match parser.program_to_end() {
             Ok(_) => vec![],
             Err(errors) => errors
                 .into_iter()

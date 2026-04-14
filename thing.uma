@@ -1,6 +1,37 @@
-int fib(int n) {
+fn add(arr, item) {
+    arr += item;
+    return 1;
 }
 
-int main() {
-   printf("aaaa");
+fn main() {
+    a = 2;
+    b = 2 * a;
+
+    {
+        c = [1, 2, a];
+        _ = add(c, 4);
+    }
+
+    return;
+
+    s = "Hello, world!";
+    s += s + s;
+
+    mat = [
+        [1, 2, 3],
+        [4, 5, 6],
+        [7, 8, 9],
+    ];
+
+    print(mat[0][0]);
+    print(mat[0][1]);
+    print(mat[0][2]);
+
+}
+
+fn fib(n) {
+    if (n <= 1)
+        return n;
+
+    return fib(n - 2) + fib(n - 1);
 }

@@ -2,7 +2,7 @@ mod print;
 
 use clap::Parser;
 
-use uma_core::{core::SourceFile, parser::UmaParser, scanner::Scanner};
+use uma_core::{core::SourceFile, executor::Executor, parser::UmaParser, scanner::Scanner};
 
 #[derive(clap::Parser)]
 struct Args {
@@ -16,8 +16,8 @@ fn main() -> anyhow::Result<()> {
     let mut scanner = Scanner::new(src.contents());
     let mut parser = UmaParser::new(&mut scanner);
 
-    let unit = match parser.translation_unit() {
-        Ok(file) => file,
+    let program = match parser.program_to_end() {
+        Ok(program) => program,
         Err(errors) => {
             for e in errors {
                 print::print_parse_error(&args.filename, &src, &e);
@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    println!("AST: {:#?}", unit);
+    let mut executor = Executor::new(&program);
+    executor.execute()?;
     Ok(())
 }

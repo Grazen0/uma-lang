@@ -1,0 +1,29 @@
+program ::= {func}*
+
+func ::= "fn" IDEN "(" {IDEN {"," IDEN}*} ")" "{" stmts "}"
+
+stmts ::= {stmt}*
+
+stmt ::= "if" "(" expr ")" stmt {"else" stmt}
+stmt ::= "while" "(" expr ")" stmt
+stmt ::= "loop" stmt
+stmt ::= "print" expr ";"
+stmt ::= "return" {expr} ";"
+stmt ::= "break" ";"
+stmt ::= "continue" ";"
+stmt ::= IDEN "=" expr ";"
+
+expr       ::= ter_expr
+ter_expr   ::= or_expr {"?" expr ":" ter_expr}
+or_expr    ::= {or_expr "||"} and_expr
+and_expr   ::= {and_expr "&&"} eq_expr
+eq_expr    ::= {eq_expr ("=="|"!=")} ineq_expr
+ineq_expr  ::= {ineq_expr ("<"|"<="|">"|">=")} add_expr 
+add_expr   ::= {add_expr ("+"|"-")} mul_expr
+mul_expr   ::= {mul_expr ("*"|"/"|"%")} unary_expr
+unary_expr ::= ("+"|"-"|"!") base_expr
+
+base_expr ::= "(" expr ")"
+base_expr ::= IDEN {"(" {expr {"," expr}*} ")"}
+base_expr ::= NUM_LIT
+base_expr ::= STR_LIT
