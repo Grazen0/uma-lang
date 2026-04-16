@@ -84,7 +84,7 @@ pub struct Func {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LValue {
     Iden(String),
-    Access(Box<LValue>, Expr),
+    Access(Box<LValue>, Box<Expr>),
 }
 
 impl TryFrom<Expr> for LValue {
@@ -95,7 +95,7 @@ impl TryFrom<Expr> for LValue {
             Expr::Iden(name) => Ok(Self::Iden(name)),
             Expr::Access { value, idx } => {
                 let value_lval = Self::try_from(*value)?;
-                Ok(Self::Access(Box::new(value_lval), *idx))
+                Ok(Self::Access(Box::new(value_lval), idx))
             }
             expr => Err(ParseError::ExprNotAssignable(expr)),
         }
@@ -105,8 +105,6 @@ impl TryFrom<Expr> for LValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Expr(Expr),
-    Assign(LValue, Expr),
-    AssignInPlace(InPlaceOp, LValue, Expr),
     Block(Vec<Stmt>),
     If {
         cond: Expr,
@@ -116,6 +114,7 @@ pub enum Stmt {
     While {
         cond: Expr,
         stmt: Box<Stmt>,
+        cont_expr: Option<Expr>,
     },
     Loop(Box<Stmt>),
     Return(Option<Expr>),
@@ -145,7 +144,7 @@ pub enum BinOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
-pub enum InPlaceOp {
+pub enum ModifyOp {
     #[display("+=")]
     Add,
     #[display("-=")]
@@ -167,6 +166,8 @@ pub enum UnaryOp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
+    Assign(LValue, Box<Expr>),
+    Modify(ModifyOp, LValue, Box<Expr>),
     Rel(Rel, Box<Expr>, Box<Expr>),
     Ternary {
         cond: Box<Expr>,
@@ -327,11 +328,23 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
             self.expect(TokenKind::LParen)?;
             let cond = self.expr()?;
             self.expect(TokenKind::RParen)?;
+
+            let cont_expr = self
+                .accept(TokenKind::Colon)
+                .then(|| -> ParseResult<Expr> {
+                    self.expect(TokenKind::LParen)?;
+                    let expr = self.expr()?;
+                    self.expect(TokenKind::RParen)?;
+                    Ok(expr)
+                })
+                .transpose()?;
+
             let stmt = self.stmt()?;
 
             Ok(Stmt::While {
                 cond,
                 stmt: Box::new(stmt),
+                cont_expr,
             })
         } else if self.accept(TokenKind::Loop) {
             let stmt = self.stmt()?;
@@ -352,42 +365,45 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
             Ok(Stmt::Continue)
         } else {
             let expr = self.expr()?;
-
-            let stmt = if self.accept(TokenKind::Assign) {
-                let lval = expr.try_into().map_err(|e| vec![e])?;
-                let src_expr = self.expr()?;
-                Stmt::Assign(lval, src_expr)
-            } else if self.accept(TokenKind::AddAssign) {
-                let lval = expr.try_into().map_err(|e| vec![e])?;
-                let src_expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Add, lval, src_expr)
-            } else if self.accept(TokenKind::SubAssign) {
-                let lval = expr.try_into().map_err(|e| vec![e])?;
-                let src_expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Sub, lval, src_expr)
-            } else if self.accept(TokenKind::MulAssign) {
-                let lval = expr.try_into().map_err(|e| vec![e])?;
-                let src_expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Mul, lval, src_expr)
-            } else if self.accept(TokenKind::DivAssign) {
-                let lval = expr.try_into().map_err(|e| vec![e])?;
-                let src_expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Div, lval, src_expr)
-            } else if self.accept(TokenKind::ModAssign) {
-                let lval = expr.try_into().map_err(|e| vec![e])?;
-                let src_expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Mod, lval, src_expr)
-            } else {
-                Stmt::Expr(expr)
-            };
-
             self.expect(TokenKind::Semi)?;
-            Ok(stmt)
+            Ok(Stmt::Expr(expr))
         }
     }
 
     fn expr(&mut self) -> ParseResult<Expr> {
-        self.ter_expr()
+        self.assign_expr()
+    }
+
+    fn assign_expr(&mut self) -> ParseResult<Expr> {
+        let expr = self.ter_expr()?;
+
+        if self.accept(TokenKind::Assign) {
+            let lval = expr.try_into().map_err(|e| vec![e])?;
+            let src_expr = self.assign_expr()?;
+            Ok(Expr::Assign(lval, Box::new(src_expr)))
+        } else if self.accept(TokenKind::AddAssign) {
+            let lval = expr.try_into().map_err(|e| vec![e])?;
+            let src_expr = self.assign_expr()?;
+            Ok(Expr::Modify(ModifyOp::Add, lval, Box::new(src_expr)))
+        } else if self.accept(TokenKind::SubAssign) {
+            let lval = expr.try_into().map_err(|e| vec![e])?;
+            let src_expr = self.assign_expr()?;
+            Ok(Expr::Modify(ModifyOp::Sub, lval, Box::new(src_expr)))
+        } else if self.accept(TokenKind::MulAssign) {
+            let lval = expr.try_into().map_err(|e| vec![e])?;
+            let src_expr = self.assign_expr()?;
+            Ok(Expr::Modify(ModifyOp::Mul, lval, Box::new(src_expr)))
+        } else if self.accept(TokenKind::DivAssign) {
+            let lval = expr.try_into().map_err(|e| vec![e])?;
+            let src_expr = self.assign_expr()?;
+            Ok(Expr::Modify(ModifyOp::Div, lval, Box::new(src_expr)))
+        } else if self.accept(TokenKind::ModAssign) {
+            let lval = expr.try_into().map_err(|e| vec![e])?;
+            let src_expr = self.assign_expr()?;
+            Ok(Expr::Modify(ModifyOp::Mod, lval, Box::new(src_expr)))
+        } else {
+            Ok(expr)
+        }
     }
 
     fn ter_expr(&mut self) -> ParseResult<Expr> {

@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use derive_more::{Display, Error};
 use kinded::Kinded;
 
-use crate::parser::InPlaceOp;
+use crate::parser::ModifyOp;
 
 #[derive(Debug, Clone, Display, Error)]
 pub enum ExecuteError {
@@ -29,7 +29,7 @@ pub enum ExecuteError {
     MismatchedFuncArgs { expected: usize, got: usize },
 
     #[display("cannot use '{op}' on variable of type '{dst_kind}'.")]
-    InvalidAssignOp { dst_kind: ValueKind, op: InPlaceOp },
+    InvalidAssignOp { dst_kind: ValueKind, op: ModifyOp },
 
     #[display("list index out of bounds (tried to access position {_0})")]
     IndexOutOfBounds(#[error(ignore)] i64),
@@ -55,6 +55,28 @@ pub enum DictKey {
     Bool(bool),
     Str(String),
     Null,
+}
+
+impl TryFrom<Value> for DictKey {
+    type Error = ExecuteError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Int(n) => Ok(Self::Int(n)),
+            Value::Bool(b) => Ok(Self::Bool(b)),
+            Value::Str(s) => Ok(Self::Str(s.borrow().clone())),
+            Value::Null => Ok(Self::Null),
+            _ => Err(ExecuteError::ExpectedSymbol {
+                found: value.kind(),
+            }),
+        }
+    }
+}
+
+pub fn expect_arg_count(expected: usize, got: usize) -> ExecuteResult<()> {
+    (expected == got)
+        .then_some(())
+        .ok_or(ExecuteError::MismatchedFuncArgs { expected, got })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, Kinded)]

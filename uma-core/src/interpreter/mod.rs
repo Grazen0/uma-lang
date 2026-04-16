@@ -1,85 +1,20 @@
 mod builtins;
 mod core;
+mod scope;
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
     rc::Rc,
     sync::{Arc, LazyLock},
 };
 
 use crate::{
-    interpreter::core::{DictKey, ExecuteError, ExecuteResult, Value},
-    parser::{BinOp, Expr, Func, InPlaceOp, LValue, Program, Rel, Stmt, UnaryOp},
+    interpreter::{
+        core::{DictKey, ExecuteError, ExecuteResult, Value},
+        scope::{Scope, ValueModifier},
+    },
+    parser::{BinOp, Expr, Func, LValue, ModifyOp, Program, Rel, Stmt, UnaryOp},
 };
-
-impl TryFrom<Value> for DictKey {
-    type Error = ExecuteError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Int(n) => Ok(Self::Int(n)),
-            Value::Bool(b) => Ok(Self::Bool(b)),
-            Value::Str(s) => Ok(Self::Str(s.borrow().clone())),
-            Value::Null => Ok(Self::Null),
-            _ => Err(ExecuteError::ExpectedSymbol {
-                found: value.kind(),
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct Scope {
-    vars: HashMap<String, Value>,
-    parent: Option<Rc<RefCell<Scope>>>,
-}
-
-impl Scope {
-    fn over(next: &Rc<RefCell<Scope>>) -> Self {
-        Self {
-            parent: Some(next.clone()),
-            ..Default::default()
-        }
-    }
-
-    fn get_cloned(&self, name: &str) -> Option<Value> {
-        self.vars.get(name).cloned().or_else(|| {
-            self.parent
-                .as_ref()
-                .and_then(|parent| parent.borrow().get_cloned(name))
-        })
-    }
-
-    fn with_var(&mut self, name: &str, f: Box<ValueModifier>) -> ExecuteResult<bool> {
-        if let Some(val) = self.vars.get_mut(name) {
-            f(val)?;
-            Ok(true)
-        } else if let Some(next) = &self.parent {
-            next.borrow_mut().with_var(name, f)
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn set(&mut self, name: String, val: Value) {
-        let val_clone = val.clone();
-
-        let modify_result = self
-            .with_var(
-                &name,
-                Box::new(move |dst| {
-                    *dst = val_clone;
-                    Ok(())
-                }),
-            )
-            .unwrap(); // should never fail
-
-        if !modify_result {
-            self.vars.insert(name, val);
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 enum ControlAction {
@@ -126,9 +61,7 @@ impl<'a> FunctionScope<'a> {
     }
 }
 
-type ValueModifier = dyn FnOnce(&mut Value) -> ExecuteResult<()>;
-
-static GLOBAL_FUNCS: LazyLock<Arc<FunctionScope<'static>>> = LazyLock::new(|| {
+static GLOBAL_FUNCS: LazyLock<Arc<FunctionScope<'_>>> = LazyLock::new(|| {
     let mut s = FunctionScope::default();
 
     s.insert("print".to_string(), Function::BuiltIn(builtins::print))
@@ -141,7 +74,7 @@ static GLOBAL_FUNCS: LazyLock<Arc<FunctionScope<'static>>> = LazyLock::new(|| {
 
 #[derive(Debug)]
 pub struct Interpreter<'a> {
-    global_scope: Rc<RefCell<Scope>>,
+    global_scope: Rc<Scope>,
     user_funcs: FunctionScope<'a>,
 }
 
@@ -172,20 +105,15 @@ impl<'a> Interpreter<'a> {
 
         match func {
             Function::UserDef(func) => {
-                if args.len() != func.args.len() {
-                    return Err(ExecuteError::MismatchedFuncArgs {
-                        expected: func.args.len(),
-                        got: args.len(),
-                    });
-                }
+                core::expect_arg_count(func.args.len(), args.len())?;
 
-                let mut scope = Scope::over(&self.global_scope);
+                let scope = Scope::over(self.global_scope.clone());
 
                 for (arg_name, arg) in func.args.iter().zip(args) {
-                    scope.set(arg_name.clone(), arg);
+                    scope.insert(arg_name.clone(), arg);
                 }
 
-                let scope = Rc::new(RefCell::new(scope));
+                let scope = Rc::new(scope);
                 let result = self.execute_stmts(&func.stmts, &scope)?;
 
                 match result {
@@ -202,7 +130,7 @@ impl<'a> Interpreter<'a> {
     fn execute_stmts(
         &mut self,
         stmts: &[Stmt],
-        scope: &Rc<RefCell<Scope>>,
+        scope: &Rc<Scope>,
     ) -> ExecuteResult<Option<ControlAction>> {
         for stmt in stmts {
             if let Some(val) = self.execute_stmt(stmt, scope)? {
@@ -216,7 +144,7 @@ impl<'a> Interpreter<'a> {
     fn execute_stmt(
         &mut self,
         stmt: &Stmt,
-        scope: &Rc<RefCell<Scope>>,
+        scope: &Rc<Scope>,
     ) -> ExecuteResult<Option<ControlAction>> {
         let result = match stmt {
             Stmt::Expr(expr) => {
@@ -224,7 +152,7 @@ impl<'a> Interpreter<'a> {
                 None
             }
             Stmt::Block(stmts) => {
-                let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+                let new_scope = Rc::new(Scope::over(scope.clone()));
                 self.execute_stmts(stmts, &new_scope)?
             }
             Stmt::If {
@@ -233,17 +161,21 @@ impl<'a> Interpreter<'a> {
                 else_stmt,
             } => {
                 if *self.eval_expr(cond, scope)?.as_bool()? {
-                    let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+                    let new_scope = Rc::new(Scope::over(scope.clone()));
                     self.execute_stmt(stmt, &new_scope)?
                 } else if let Some(else_stmt) = else_stmt.as_ref() {
-                    let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+                    let new_scope = Rc::new(Scope::over(scope.clone()));
                     self.execute_stmt(else_stmt, &new_scope)?
                 } else {
                     None
                 }
             }
-            Stmt::While { cond, stmt } => {
-                let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+            Stmt::While {
+                cond,
+                stmt,
+                cont_expr,
+            } => {
+                let new_scope = Rc::new(Scope::over(scope.clone()));
 
                 loop {
                     if !*self.eval_expr(cond, scope)?.as_bool()? {
@@ -252,14 +184,17 @@ impl<'a> Interpreter<'a> {
 
                     match self.execute_stmt(stmt, &new_scope)? {
                         Some(ControlAction::Break) => break None,
-                        Some(ControlAction::Continue) => {}
                         Some(ControlAction::Return(val)) => break Some(ControlAction::Return(val)),
-                        None => {}
+                        None | Some(ControlAction::Continue) => {
+                            if let Some(expr) = cont_expr {
+                                self.eval_expr(expr, scope)?;
+                            }
+                        }
                     }
                 }
             }
             Stmt::Loop(stmt) => {
-                let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+                let new_scope = Rc::new(Scope::over(scope.clone()));
 
                 loop {
                     match self.execute_stmt(stmt, &new_scope)? {
@@ -280,57 +215,15 @@ impl<'a> Interpreter<'a> {
             }
             Stmt::Break => Some(ControlAction::Break),
             Stmt::Continue => Some(ControlAction::Continue),
-            Stmt::Assign(lval, expr) => {
-                let val = self.eval_expr(expr, scope)?;
-                self.assign_lval(lval, scope, val)?;
-                None
-            }
-            Stmt::AssignInPlace(op, lval, expr) => {
-                let val = self.eval_expr(expr, scope)?;
-                let op = *op;
-
-                self.with_lval(
-                    lval,
-                    scope,
-                    Box::new(move |dst| {
-                        match (dst, op) {
-                            (Value::Int(n), InPlaceOp::Add) => *n += val.as_int()?,
-                            (Value::Int(n), InPlaceOp::Sub) => *n -= val.as_int()?,
-                            (Value::Int(n), InPlaceOp::Mul) => *n *= val.as_int()?,
-                            (Value::Int(n), InPlaceOp::Div) => *n /= val.as_int()?,
-                            (Value::Int(n), InPlaceOp::Mod) => *n %= val.as_int()?,
-                            (Value::List(items), InPlaceOp::Add) => items.borrow_mut().push(val),
-                            (Value::Str(s), InPlaceOp::Add) => {
-                                let val_str = val.to_string();
-                                s.borrow_mut().push_str(&val_str);
-                            }
-                            (dst_val, op) => {
-                                return Err(ExecuteError::InvalidAssignOp {
-                                    dst_kind: dst_val.kind(),
-                                    op,
-                                });
-                            }
-                        }
-                        Ok(())
-                    }),
-                )?;
-
-                None
-            }
         };
 
         Ok(result)
     }
 
-    fn assign_lval(
-        &mut self,
-        lval: &LValue,
-        scope: &Rc<RefCell<Scope>>,
-        val: Value,
-    ) -> ExecuteResult<()> {
+    fn assign_lval(&mut self, lval: &LValue, scope: &Rc<Scope>, val: Value) -> ExecuteResult<()> {
         match lval {
             LValue::Iden(name) => {
-                scope.borrow_mut().set(name.clone(), val);
+                scope.insert(name.clone(), val);
                 Ok(())
             }
             LValue::Access(sub_lval, idx_expr) => {
@@ -370,12 +263,12 @@ impl<'a> Interpreter<'a> {
     fn with_lval(
         &mut self,
         lval: &LValue,
-        scope: &Rc<RefCell<Scope>>,
+        scope: &Rc<Scope>,
         f: Box<ValueModifier>,
     ) -> ExecuteResult<()> {
         match lval {
             LValue::Iden(name) => {
-                if !scope.borrow_mut().with_var(name, f)? {
+                if !scope.with_var(name, f)? {
                     Err(ExecuteError::UndeclaredVariable(name.clone()))
                 } else {
                     Ok(())
@@ -417,13 +310,52 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn eval_expr(&mut self, expr: &Expr, scope: &Rc<RefCell<Scope>>) -> ExecuteResult<Value> {
+    fn eval_expr(&mut self, expr: &Expr, scope: &Rc<Scope>) -> ExecuteResult<Value> {
         match expr {
+            Expr::Assign(lval, expr) => {
+                let val = self.eval_expr(expr, scope)?;
+                self.assign_lval(lval, scope, val.clone())?;
+                Ok(val)
+            }
+            Expr::Modify(op, lval, expr) => {
+                let val = self.eval_expr(expr, scope)?;
+                let val_clone = val.clone();
+                let op = *op;
+
+                self.with_lval(
+                    lval,
+                    scope,
+                    Box::new(move |dst| {
+                        match (dst, op) {
+                            (Value::Int(n), ModifyOp::Add) => *n += val_clone.as_int()?,
+                            (Value::Int(n), ModifyOp::Sub) => *n -= val_clone.as_int()?,
+                            (Value::Int(n), ModifyOp::Mul) => *n *= val_clone.as_int()?,
+                            (Value::Int(n), ModifyOp::Div) => *n /= val_clone.as_int()?,
+                            (Value::Int(n), ModifyOp::Mod) => *n %= val_clone.as_int()?,
+                            (Value::List(items), ModifyOp::Add) => {
+                                items.borrow_mut().push(val_clone)
+                            }
+                            (Value::Str(s), ModifyOp::Add) => {
+                                let val_str = val_clone.to_string();
+                                s.borrow_mut().push_str(&val_str);
+                            }
+                            (dst_val, op) => {
+                                return Err(ExecuteError::InvalidAssignOp {
+                                    dst_kind: dst_val.kind(),
+                                    op,
+                                });
+                            }
+                        }
+                        Ok(())
+                    }),
+                )?;
+
+                Ok(val)
+            }
             Expr::Int(n) => Ok(Value::Int(*n as i64)),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
             Expr::Null => Ok(Value::Null),
             Expr::Iden(name) => scope
-                .borrow()
                 .get_cloned(name)
                 .ok_or_else(|| ExecuteError::UndeclaredVariable(name.clone())),
             Expr::Str(s) => Ok(Value::str(s.clone())),
