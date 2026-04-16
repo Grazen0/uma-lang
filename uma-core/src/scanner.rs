@@ -110,8 +110,6 @@ pub enum TokenValue {
     Iden(String),
     #[kinded(rename = "error")]
     Error(ScanErrorValue),
-    #[kinded(rename = "'print'")]
-    Print,
     #[kinded(rename = "'fn'")]
     Fn,
     #[kinded(rename = "'null'")]
@@ -119,16 +117,30 @@ pub enum TokenValue {
 }
 
 impl TokenValue {
-    pub fn into_num(self) -> u32 {
+    pub fn as_num_lit(&self) -> &u32 {
         match self {
             Self::NumLit(n) => n,
             _ => unreachable!(),
         }
     }
 
-    pub fn into_str(self) -> String {
+    pub fn as_iden(&self) -> &String {
+        match self {
+            Self::Iden(name) => name,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn into_str_lit(self) -> String {
         match self {
             Self::StrLit(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn into_iden(self) -> String {
+        match self {
+            Self::Iden(name) => name,
             _ => unreachable!(),
         }
     }
@@ -366,7 +378,6 @@ impl<'a> Scanner<'a> {
                     "break" => TokenValue::Break,
                     "true" => TokenValue::True,
                     "false" => TokenValue::False,
-                    "print" => TokenValue::Print,
                     "fn" => TokenValue::Fn,
                     "null" => TokenValue::Null,
                     _ => TokenValue::Iden(iden),

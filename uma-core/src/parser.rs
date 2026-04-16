@@ -1,6 +1,6 @@
 use crate::scanner::{Token, TokenKind, TokenValue};
 use derive_more::{Display, Error};
-use std::{collections::HashMap, iter::Peekable, ops::Range};
+use std::{iter::Peekable, ops::Range};
 
 fn fmt_opt_token(tok: Option<&Token>, src: &str) -> String {
     tok.map(|tok| format!("'{}'", &src[tok.byte_range.clone()]))
@@ -22,12 +22,15 @@ pub enum ParseError {
         found: Option<Token>,
         expected: Option<TokenKind>,
     },
+
     #[display("expected expression")]
     ExpectedExpression { found: Option<Token> },
-    #[display("function redeclaration")]
-    FunctionRedeclaration { name_token: Token },
+
     #[display("duplicate parameter")]
     DuplicateParameter { param_token: Token },
+
+    #[display("expression is not assignable")]
+    ExprNotAssignable(#[error(ignore)] Expr),
 }
 
 impl ParseError {
@@ -44,14 +47,11 @@ impl ParseError {
                 let found_str = fmt_opt_token(found.as_ref(), src);
                 format!("expected expression, found {found_str}")
             }
-            Self::FunctionRedeclaration { name_token } => {
-                let found_str = fmt_opt_token(Some(name_token), src);
-                format!("function {found_str} redeclared")
-            }
             Self::DuplicateParameter { param_token } => {
                 let found_str = fmt_opt_token(Some(param_token), src);
                 format!("duplicate parameter {found_str}")
             }
+            Self::ExprNotAssignable(..) => "cannot assign to expression".to_string(),
         }
     }
 }
@@ -61,30 +61,52 @@ impl ParseError {
         match self {
             Self::UnexpectedToken { found, .. } => found.as_ref().map(|t| t.byte_range.clone()),
             Self::ExpectedExpression { found } => found.as_ref().map(|t| t.byte_range.clone()),
-            Self::FunctionRedeclaration { name_token } => Some(name_token.byte_range.clone()),
             Self::DuplicateParameter { param_token } => Some(param_token.byte_range.clone()),
+            Self::ExprNotAssignable(..) => None,
         }
     }
 }
 
 pub type ParseResult<T> = Result<T, Vec<ParseError>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub funcs: HashMap<String, Func>,
+    pub funcs: Vec<Func>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Func {
+    pub name: String,
     pub args: Vec<String>,
     pub stmts: Vec<Stmt>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LValue {
+    Iden(String),
+    Access(Box<LValue>, Expr),
+}
+
+impl TryFrom<Expr> for LValue {
+    type Error = ParseError;
+
+    fn try_from(expr: Expr) -> Result<Self, Self::Error> {
+        match expr {
+            Expr::Iden(name) => Ok(Self::Iden(name)),
+            Expr::Access { value, idx } => {
+                let value_lval = Self::try_from(*value)?;
+                Ok(Self::Access(Box::new(value_lval), *idx))
+            }
+            expr => Err(ParseError::ExprNotAssignable(expr)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Assign(String, Expr),
-    AssignInPlace(InPlaceOp, String, Expr),
-    Print(Expr),
+    Expr(Expr),
+    Assign(LValue, Expr),
+    AssignInPlace(InPlaceOp, LValue, Expr),
     Block(Vec<Stmt>),
     If {
         cond: Expr,
@@ -136,14 +158,14 @@ pub enum InPlaceOp {
     Mod,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Plus,
     Minus,
     BoolNot,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Rel(Rel, Box<Expr>, Box<Expr>),
     Ternary {
@@ -159,9 +181,10 @@ pub enum Expr {
     Null,
     Str(String),
     List(Vec<Expr>),
+    Dict(Vec<(Expr, Expr)>),
     FuncCall(String, Vec<Expr>),
-    ListAccess {
-        list: Box<Expr>,
+    Access {
+        value: Box<Expr>,
         idx: Box<Expr>,
     },
 }
@@ -178,39 +201,34 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         }
     }
 
-    fn accept_pred(&mut self, f: impl FnOnce(&TokenValue) -> bool) -> Option<Token> {
-        if let Some(tok) = self.tokens.peek()
-            && f(&tok.val)
+    fn accept_token(&mut self, kind: TokenKind) -> Option<Token> {
+        self.tokens
+            .peek()
+            .is_some_and(|tok| tok.val.kind() == kind)
+            .then(|| self.tokens.next().unwrap())
+    }
+
+    fn accept(&mut self, kind: TokenKind) -> bool {
+        self.accept_token(kind).is_some()
+    }
+
+    fn expect(&mut self, kind: TokenKind) -> Result<Token, Vec<ParseError>> {
+        let tok = self.tokens.next();
+
+        if let Some(t) = &tok
+            && t.val.kind() == kind
         {
-            let tok = self.tokens.next().unwrap();
-            return Some(tok);
+            Ok(tok.unwrap())
+        } else {
+            Err(vec![ParseError::UnexpectedToken {
+                found: tok,
+                expected: Some(kind),
+            }])
         }
-
-        None
     }
 
-    fn accept_kind(&mut self, kind: TokenKind) -> Option<Token> {
-        self.accept_pred(|tok| tok.kind() == kind)
-    }
-
-    fn accept_kind_discard(&mut self, kind: TokenKind) -> bool {
-        self.accept_kind(kind).is_some()
-    }
-
-    fn expect_kind(&mut self, kind: TokenKind) -> Result<Token, Vec<ParseError>> {
-        let peek = self.tokens.peek();
-
-        if let Some(tok) = peek
-            && tok.val.kind() == kind
-        {
-            let tok = self.tokens.next().unwrap();
-            return Ok(tok);
-        }
-
-        Err(vec![ParseError::UnexpectedToken {
-            expected: Some(kind),
-            found: peek.cloned(),
-        }])
+    fn peek_is_not(&mut self, kind: TokenKind) -> bool {
+        self.tokens.peek().is_none_or(|tok| tok.val.kind() != kind)
     }
 
     pub fn expect_done(&mut self) -> Result<(), ParseError> {
@@ -231,27 +249,25 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     }
 
     pub fn program(&mut self) -> ParseResult<Program> {
+        let mut funcs = vec![];
         let mut errors = vec![];
-        let mut funcs = HashMap::new();
 
-        while self.accept_kind_discard(TokenKind::Fn) {
-            let name_token = self.expect_kind(TokenKind::Iden)?;
-            let TokenValue::Iden(fn_name) = &name_token.val else {
-                unreachable!()
-            };
+        while self.accept(TokenKind::Fn) {
+            let name_token = self.expect(TokenKind::Iden)?;
+            let name = name_token.val.into_iden();
 
-            self.expect_kind(TokenKind::LParen)?;
+            self.expect(TokenKind::LParen)?;
 
             let mut args = vec![];
 
-            if let Some(param_token) = self.accept_kind(TokenKind::Iden) {
+            if let Some(param_token) = self.accept_token(TokenKind::Iden) {
                 let TokenValue::Iden(arg_name) = param_token.val else {
                     unreachable!()
                 };
                 args.push(arg_name);
 
-                while self.accept_kind_discard(TokenKind::Comma) {
-                    let param_token = self.expect_kind(TokenKind::Iden)?;
+                while self.accept(TokenKind::Comma) {
+                    let param_token = self.expect(TokenKind::Iden)?;
                     let TokenValue::Iden(arg_name) = &param_token.val else {
                         unreachable!()
                     };
@@ -264,17 +280,12 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
                 }
             }
 
-            self.expect_kind(TokenKind::RParen)?;
-            self.expect_kind(TokenKind::LBrace)?;
+            self.expect(TokenKind::RParen)?;
+            self.expect(TokenKind::LBrace)?;
             let stmts = self.stmts()?;
-            self.expect_kind(TokenKind::RBrace)?;
+            self.expect(TokenKind::RBrace)?;
 
-            if funcs.contains_key(fn_name) {
-                errors.push(ParseError::FunctionRedeclaration { name_token });
-                continue;
-            }
-
-            funcs.insert(fn_name.clone(), Func { stmts, args });
+            funcs.push(Func { name, stmts, args });
         }
 
         make_parse_result(Program { funcs }, errors)
@@ -283,25 +294,7 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     fn stmts(&mut self) -> ParseResult<Vec<Stmt>> {
         let mut stmts = vec![];
 
-        while self
-            .tokens
-            .peek()
-            .map(|tok| tok.val.kind())
-            .is_some_and(|kind| {
-                [
-                    TokenKind::Print,
-                    TokenKind::Iden,
-                    TokenKind::LBrace,
-                    TokenKind::If,
-                    TokenKind::While,
-                    TokenKind::Loop,
-                    TokenKind::Return,
-                    TokenKind::Break,
-                    TokenKind::Continue,
-                ]
-                .contains(&kind)
-            })
-        {
+        while self.peek_is_not(TokenKind::RBrace) {
             let stmt = self.stmt()?;
             stmts.push(stmt);
         }
@@ -310,22 +303,18 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     }
 
     fn stmt(&mut self) -> ParseResult<Stmt> {
-        if self.accept_kind_discard(TokenKind::Print) {
-            let expr = self.expr()?;
-            self.expect_kind(TokenKind::Semi)?;
-            Ok(Stmt::Print(expr))
-        } else if self.accept_kind_discard(TokenKind::LBrace) {
+        if self.accept(TokenKind::LBrace) {
             let blk_stmts = self.stmts()?;
-            self.expect_kind(TokenKind::RBrace)?;
+            self.expect(TokenKind::RBrace)?;
             Ok(Stmt::Block(blk_stmts))
-        } else if self.accept_kind_discard(TokenKind::If) {
-            self.expect_kind(TokenKind::LParen)?;
+        } else if self.accept(TokenKind::If) {
+            self.expect(TokenKind::LParen)?;
             let cond = self.expr()?;
-            self.expect_kind(TokenKind::RParen)?;
+            self.expect(TokenKind::RParen)?;
             let stmt = self.stmt()?;
 
             let else_stmt = self
-                .accept_kind_discard(TokenKind::Else)
+                .accept(TokenKind::Else)
                 .then(|| self.stmt())
                 .transpose()?;
 
@@ -334,68 +323,66 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
                 stmt: Box::new(stmt),
                 else_stmt: else_stmt.map(Box::new),
             })
-        } else if self.accept_kind_discard(TokenKind::While) {
-            self.expect_kind(TokenKind::LParen)?;
+        } else if self.accept(TokenKind::While) {
+            self.expect(TokenKind::LParen)?;
             let cond = self.expr()?;
-            self.expect_kind(TokenKind::RParen)?;
+            self.expect(TokenKind::RParen)?;
             let stmt = self.stmt()?;
 
             Ok(Stmt::While {
                 cond,
                 stmt: Box::new(stmt),
             })
-        } else if self.accept_kind_discard(TokenKind::Loop) {
+        } else if self.accept(TokenKind::Loop) {
             let stmt = self.stmt()?;
             Ok(Stmt::Loop(Box::new(stmt)))
-        } else if self.accept_kind_discard(TokenKind::Return) {
+        } else if self.accept(TokenKind::Return) {
             let expr = self
-                .tokens
-                .peek()
-                .is_some_and(|tok| tok.val != TokenValue::Semi)
+                .peek_is_not(TokenKind::Semi)
                 .then(|| self.expr())
                 .transpose()?;
 
-            self.expect_kind(TokenKind::Semi)?;
+            self.expect(TokenKind::Semi)?;
             Ok(Stmt::Return(expr))
-        } else if self.accept_kind_discard(TokenKind::Break) {
-            self.expect_kind(TokenKind::Semi)?;
+        } else if self.accept(TokenKind::Break) {
+            self.expect(TokenKind::Semi)?;
             Ok(Stmt::Break)
-        } else if self.accept_kind_discard(TokenKind::Continue) {
-            self.expect_kind(TokenKind::Semi)?;
+        } else if self.accept(TokenKind::Continue) {
+            self.expect(TokenKind::Semi)?;
             Ok(Stmt::Continue)
-        } else if let Some(tok) = self.accept_kind(TokenKind::Iden) {
-            let TokenValue::Iden(name) = tok.val else {
-                unreachable!()
-            };
-
-            let stmt = if self.accept_kind_discard(TokenKind::AddAssign) {
-                let expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Add, name, expr)
-            } else if self.accept_kind_discard(TokenKind::SubAssign) {
-                let expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Sub, name, expr)
-            } else if self.accept_kind_discard(TokenKind::MulAssign) {
-                let expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Mul, name, expr)
-            } else if self.accept_kind_discard(TokenKind::DivAssign) {
-                let expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Div, name, expr)
-            } else if self.accept_kind_discard(TokenKind::ModAssign) {
-                let expr = self.expr()?;
-                Stmt::AssignInPlace(InPlaceOp::Mod, name, expr)
-            } else {
-                self.expect_kind(TokenKind::Assign)?;
-                let expr = self.expr()?;
-                Stmt::Assign(name, expr)
-            };
-
-            self.expect_kind(TokenKind::Semi)?;
-            Ok(stmt)
         } else {
-            Err(vec![ParseError::UnexpectedToken {
-                found: self.tokens.next(),
-                expected: None,
-            }])
+            let expr = self.expr()?;
+
+            let stmt = if self.accept(TokenKind::Assign) {
+                let lval = expr.try_into().map_err(|e| vec![e])?;
+                let src_expr = self.expr()?;
+                Stmt::Assign(lval, src_expr)
+            } else if self.accept(TokenKind::AddAssign) {
+                let lval = expr.try_into().map_err(|e| vec![e])?;
+                let src_expr = self.expr()?;
+                Stmt::AssignInPlace(InPlaceOp::Add, lval, src_expr)
+            } else if self.accept(TokenKind::SubAssign) {
+                let lval = expr.try_into().map_err(|e| vec![e])?;
+                let src_expr = self.expr()?;
+                Stmt::AssignInPlace(InPlaceOp::Sub, lval, src_expr)
+            } else if self.accept(TokenKind::MulAssign) {
+                let lval = expr.try_into().map_err(|e| vec![e])?;
+                let src_expr = self.expr()?;
+                Stmt::AssignInPlace(InPlaceOp::Mul, lval, src_expr)
+            } else if self.accept(TokenKind::DivAssign) {
+                let lval = expr.try_into().map_err(|e| vec![e])?;
+                let src_expr = self.expr()?;
+                Stmt::AssignInPlace(InPlaceOp::Div, lval, src_expr)
+            } else if self.accept(TokenKind::ModAssign) {
+                let lval = expr.try_into().map_err(|e| vec![e])?;
+                let src_expr = self.expr()?;
+                Stmt::AssignInPlace(InPlaceOp::Mod, lval, src_expr)
+            } else {
+                Stmt::Expr(expr)
+            };
+
+            self.expect(TokenKind::Semi)?;
+            Ok(stmt)
         }
     }
 
@@ -406,9 +393,9 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     fn ter_expr(&mut self) -> ParseResult<Expr> {
         let expr = self.or_expr()?;
 
-        if self.accept_kind_discard(TokenKind::Question) {
+        if self.accept(TokenKind::Question) {
             let if_yes = self.expr()?;
-            self.expect_kind(TokenKind::Colon)?;
+            self.expect(TokenKind::Colon)?;
             let if_no = self.ter_expr()?;
 
             Ok(Expr::Ternary {
@@ -424,7 +411,7 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     fn or_expr(&mut self) -> ParseResult<Expr> {
         let mut expr = self.and_expr()?;
 
-        while self.accept_kind_discard(TokenKind::BoolOr) {
+        while self.accept(TokenKind::BoolOr) {
             let right = self.and_expr()?;
             expr = Expr::BinOp(BinOp::BoolOr, Box::new(expr), Box::new(right));
         }
@@ -435,7 +422,7 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     fn and_expr(&mut self) -> ParseResult<Expr> {
         let mut expr = self.eq_expr()?;
 
-        while self.accept_kind_discard(TokenKind::BoolAnd) {
+        while self.accept(TokenKind::BoolAnd) {
             let right = self.eq_expr()?;
             expr = Expr::BinOp(BinOp::BoolAnd, Box::new(expr), Box::new(right));
         }
@@ -447,9 +434,9 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         let mut expr = self.ineq_expr()?;
 
         loop {
-            let rel = if self.accept_kind_discard(TokenKind::Eq) {
+            let rel = if self.accept(TokenKind::Eq) {
                 Rel::Eq
-            } else if self.accept_kind_discard(TokenKind::Neq) {
+            } else if self.accept(TokenKind::Neq) {
                 Rel::Neq
             } else {
                 break;
@@ -466,13 +453,13 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         let mut expr = self.add_expr()?;
 
         loop {
-            let rel = if self.accept_kind_discard(TokenKind::Lt) {
+            let rel = if self.accept(TokenKind::Lt) {
                 Rel::Lt
-            } else if self.accept_kind_discard(TokenKind::Leq) {
+            } else if self.accept(TokenKind::Leq) {
                 Rel::Leq
-            } else if self.accept_kind_discard(TokenKind::Gt) {
+            } else if self.accept(TokenKind::Gt) {
                 Rel::Gt
-            } else if self.accept_kind_discard(TokenKind::Geq) {
+            } else if self.accept(TokenKind::Geq) {
                 Rel::Geq
             } else {
                 break;
@@ -489,9 +476,9 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         let mut expr = self.mul_expr()?;
 
         loop {
-            let op = if self.accept_kind_discard(TokenKind::Add) {
+            let op = if self.accept(TokenKind::Add) {
                 BinOp::Add
-            } else if self.accept_kind_discard(TokenKind::Sub) {
+            } else if self.accept(TokenKind::Sub) {
                 BinOp::Sub
             } else {
                 break;
@@ -508,11 +495,11 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         let mut expr = self.unary_expr()?;
 
         loop {
-            let op = if self.accept_kind_discard(TokenKind::Mul) {
+            let op = if self.accept(TokenKind::Mul) {
                 BinOp::Mul
-            } else if self.accept_kind_discard(TokenKind::Div) {
+            } else if self.accept(TokenKind::Div) {
                 BinOp::Div
-            } else if self.accept_kind_discard(TokenKind::Mod) {
+            } else if self.accept(TokenKind::Mod) {
                 BinOp::Mod
             } else {
                 break;
@@ -526,13 +513,13 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     }
 
     fn unary_expr(&mut self) -> ParseResult<Expr> {
-        if self.accept_kind_discard(TokenKind::Add) {
+        if self.accept(TokenKind::Add) {
             let expr = self.access_expr()?;
             Ok(Expr::UnaryOp(UnaryOp::Plus, Box::new(expr)))
-        } else if self.accept_kind_discard(TokenKind::Sub) {
+        } else if self.accept(TokenKind::Sub) {
             let expr = self.access_expr()?;
             Ok(Expr::UnaryOp(UnaryOp::Minus, Box::new(expr)))
-        } else if self.accept_kind_discard(TokenKind::BoolNot) {
+        } else if self.accept(TokenKind::BoolNot) {
             let expr = self.access_expr()?;
             Ok(Expr::UnaryOp(UnaryOp::BoolNot, Box::new(expr)))
         } else {
@@ -543,12 +530,12 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
     fn access_expr(&mut self) -> ParseResult<Expr> {
         let mut expr = self.base_expr()?;
 
-        while self.accept_kind_discard(TokenKind::LBracket) {
+        while self.accept(TokenKind::LBracket) {
             let idx_expr = self.expr()?;
-            self.expect_kind(TokenKind::RBracket)?;
+            self.expect(TokenKind::RBracket)?;
 
-            expr = Expr::ListAccess {
-                list: Box::new(expr),
+            expr = Expr::Access {
+                value: Box::new(expr),
                 idx: Box::new(idx_expr),
             };
         }
@@ -556,79 +543,81 @@ impl<'a, I: Iterator<Item = Token>> UmaParser<'a, I> {
         Ok(expr)
     }
 
+    fn dict_entry(&mut self) -> ParseResult<(Expr, Expr)> {
+        let key_expr = self.expr()?;
+        self.expect(TokenKind::Colon)?;
+        let val_expr = self.expr()?;
+        Ok((key_expr, val_expr))
+    }
+
     fn base_expr(&mut self) -> ParseResult<Expr> {
         let tok = self.tokens.peek().cloned();
 
-        if self.accept_kind_discard(TokenKind::LParen) {
+        if self.accept(TokenKind::LParen) {
             let expr = self.expr()?;
-            self.expect_kind(TokenKind::RParen)?;
+            self.expect(TokenKind::RParen)?;
             Ok(expr)
-        } else if let Some(tok) = self.accept_kind(TokenKind::NumLit) {
-            Ok(Expr::Int(tok.val.into_num()))
-        } else if self.accept_kind_discard(TokenKind::True) {
+        } else if let Some(tok) = self.accept_token(TokenKind::NumLit) {
+            Ok(Expr::Int(*tok.val.as_num_lit()))
+        } else if self.accept(TokenKind::True) {
             Ok(Expr::Bool(true))
-        } else if self.accept_kind_discard(TokenKind::False) {
+        } else if self.accept(TokenKind::False) {
             Ok(Expr::Bool(false))
-        } else if self.accept_kind_discard(TokenKind::Null) {
+        } else if self.accept(TokenKind::Null) {
             Ok(Expr::Null)
-        } else if self.accept_kind_discard(TokenKind::LBracket) {
+        } else if self.accept(TokenKind::LBrace) {
             let mut items = vec![];
 
-            if self
-                .tokens
-                .peek()
-                .is_some_and(|tok| tok.val != TokenValue::RBracket)
-            {
+            if self.peek_is_not(TokenKind::RBrace) {
+                let entry = self.dict_entry()?;
+                items.push(entry);
+
+                while self.accept(TokenKind::Comma) && self.peek_is_not(TokenKind::RBrace) {
+                    let entry = self.dict_entry()?;
+                    items.push(entry);
+                }
+            }
+
+            self.expect(TokenKind::RBrace)?;
+            Ok(Expr::Dict(items))
+        } else if self.accept(TokenKind::LBracket) {
+            let mut items = vec![];
+
+            if self.peek_is_not(TokenKind::RBracket) {
                 let expr = self.expr()?;
                 items.push(expr);
 
-                while self.accept_kind_discard(TokenKind::Comma)
-                    && self
-                        .tokens
-                        .peek()
-                        .is_some_and(|tok| tok.val != TokenValue::RBracket)
-                {
+                while self.accept(TokenKind::Comma) && self.peek_is_not(TokenKind::RBracket) {
                     let expr = self.expr()?;
                     items.push(expr);
                 }
             }
 
-            self.expect_kind(TokenKind::RBracket)?;
+            self.expect(TokenKind::RBracket)?;
             Ok(Expr::List(items))
-        } else if let Some(tok) = self.accept_kind(TokenKind::Iden) {
-            let TokenValue::Iden(name) = tok.val else {
-                unreachable!()
-            };
+        } else if let Some(tok) = self.accept_token(TokenKind::Iden) {
+            let name = tok.val.into_iden();
 
-            if self.accept_kind_discard(TokenKind::LParen) {
+            if self.accept(TokenKind::LParen) {
                 let mut args = vec![];
-                if self
-                    .tokens
-                    .peek()
-                    .is_some_and(|tok| tok.val != TokenValue::RParen)
-                {
+
+                if self.peek_is_not(TokenKind::RParen) {
                     let expr = self.expr()?;
                     args.push(expr);
 
-                    while self.accept_kind_discard(TokenKind::Comma)
-                        && self
-                            .tokens
-                            .peek()
-                            .is_some_and(|tok| tok.val != TokenValue::RParen)
-                    {
+                    while self.accept(TokenKind::Comma) && self.peek_is_not(TokenKind::RParen) {
                         let expr = self.expr()?;
                         args.push(expr);
                     }
                 }
 
-                self.expect_kind(TokenKind::RParen)?;
-
+                self.expect(TokenKind::RParen)?;
                 Ok(Expr::FuncCall(name, args))
             } else {
                 Ok(Expr::Iden(name))
             }
-        } else if let Some(tok) = self.accept_kind(TokenKind::StrLit) {
-            Ok(Expr::Str(tok.val.into_str()))
+        } else if let Some(tok) = self.accept_token(TokenKind::StrLit) {
+            Ok(Expr::Str(tok.val.into_str_lit()))
         } else {
             Err(vec![ParseError::ExpectedExpression { found: tok }])
         }

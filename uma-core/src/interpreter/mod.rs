@@ -1,0 +1,590 @@
+mod builtins;
+mod core;
+
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{Arc, LazyLock},
+};
+
+use crate::{
+    interpreter::core::{DictKey, ExecuteError, ExecuteResult, Value},
+    parser::{BinOp, Expr, Func, InPlaceOp, LValue, Program, Rel, Stmt, UnaryOp},
+};
+
+impl TryFrom<Value> for DictKey {
+    type Error = ExecuteError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Int(n) => Ok(Self::Int(n)),
+            Value::Bool(b) => Ok(Self::Bool(b)),
+            Value::Str(s) => Ok(Self::Str(s.borrow().clone())),
+            Value::Null => Ok(Self::Null),
+            _ => Err(ExecuteError::ExpectedSymbol {
+                found: value.kind(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Scope {
+    vars: HashMap<String, Value>,
+    parent: Option<Rc<RefCell<Scope>>>,
+}
+
+impl Scope {
+    fn over(next: &Rc<RefCell<Scope>>) -> Self {
+        Self {
+            parent: Some(next.clone()),
+            ..Default::default()
+        }
+    }
+
+    fn get_cloned(&self, name: &str) -> Option<Value> {
+        self.vars.get(name).cloned().or_else(|| {
+            self.parent
+                .as_ref()
+                .and_then(|parent| parent.borrow().get_cloned(name))
+        })
+    }
+
+    fn with_var(&mut self, name: &str, f: Box<ValueModifier>) -> ExecuteResult<bool> {
+        if let Some(val) = self.vars.get_mut(name) {
+            f(val)?;
+            Ok(true)
+        } else if let Some(next) = &self.parent {
+            next.borrow_mut().with_var(name, f)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn set(&mut self, name: String, val: Value) {
+        let val_clone = val.clone();
+
+        let modify_result = self
+            .with_var(
+                &name,
+                Box::new(move |dst| {
+                    *dst = val_clone;
+                    Ok(())
+                }),
+            )
+            .unwrap(); // should never fail
+
+        if !modify_result {
+            self.vars.insert(name, val);
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ControlAction {
+    Return(Option<Value>),
+    Break,
+    Continue,
+}
+
+type BuiltInFn = fn(&mut Interpreter, Vec<Value>) -> ExecuteResult<Option<Value>>;
+
+#[derive(Debug, Clone)]
+enum Function<'a> {
+    BuiltIn(BuiltInFn),
+    UserDef(&'a Func),
+}
+
+#[derive(Debug, Default)]
+struct FunctionScope<'a> {
+    funcs: HashMap<String, Function<'a>>,
+    parent: Option<Arc<FunctionScope<'a>>>,
+}
+
+impl<'a> FunctionScope<'a> {
+    fn over(parent: Arc<FunctionScope<'a>>) -> Self {
+        Self {
+            parent: Some(parent),
+            ..Default::default()
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&Function<'a>> {
+        self.funcs
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
+    }
+
+    fn insert(&mut self, name: String, value: Function<'a>) -> ExecuteResult<()> {
+        if self.funcs.contains_key(&name) {
+            return Err(ExecuteError::FuncRedeclaration);
+        }
+
+        self.funcs.insert(name, value);
+        Ok(())
+    }
+}
+
+type ValueModifier = dyn FnOnce(&mut Value) -> ExecuteResult<()>;
+
+static GLOBAL_FUNCS: LazyLock<Arc<FunctionScope<'static>>> = LazyLock::new(|| {
+    let mut s = FunctionScope::default();
+
+    s.insert("print".to_string(), Function::BuiltIn(builtins::print))
+        .unwrap();
+    s.insert("len".to_string(), Function::BuiltIn(builtins::len))
+        .unwrap();
+
+    Arc::new(s)
+});
+
+#[derive(Debug)]
+pub struct Interpreter<'a> {
+    global_scope: Rc<RefCell<Scope>>,
+    user_funcs: FunctionScope<'a>,
+}
+
+impl<'a> Interpreter<'a> {
+    pub fn new(program: &'a Program) -> ExecuteResult<Self> {
+        let mut user_funcs = FunctionScope::over(GLOBAL_FUNCS.clone());
+
+        for func in &program.funcs {
+            user_funcs.insert(func.name.clone(), Function::UserDef(func))?;
+        }
+
+        Ok(Self {
+            global_scope: Rc::default(),
+            user_funcs,
+        })
+    }
+
+    pub fn execute(&mut self) -> ExecuteResult<()> {
+        self.execute_func("main", vec![])?;
+        Ok(())
+    }
+
+    fn execute_func(&mut self, func_name: &str, args: Vec<Value>) -> ExecuteResult<Option<Value>> {
+        let func = self
+            .user_funcs
+            .get(func_name)
+            .ok_or_else(|| ExecuteError::UndeclaredFunction(func_name.to_string()))?;
+
+        match func {
+            Function::UserDef(func) => {
+                if args.len() != func.args.len() {
+                    return Err(ExecuteError::MismatchedFuncArgs {
+                        expected: func.args.len(),
+                        got: args.len(),
+                    });
+                }
+
+                let mut scope = Scope::over(&self.global_scope);
+
+                for (arg_name, arg) in func.args.iter().zip(args) {
+                    scope.set(arg_name.clone(), arg);
+                }
+
+                let scope = Rc::new(RefCell::new(scope));
+                let result = self.execute_stmts(&func.stmts, &scope)?;
+
+                match result {
+                    None => Ok(None),
+                    Some(ControlAction::Break) => Err(ExecuteError::UnexpectedBreak),
+                    Some(ControlAction::Continue) => Err(ExecuteError::UnexpectedContinue),
+                    Some(ControlAction::Return(val)) => Ok(val),
+                }
+            }
+            Function::BuiltIn(f) => f(self, args),
+        }
+    }
+
+    fn execute_stmts(
+        &mut self,
+        stmts: &[Stmt],
+        scope: &Rc<RefCell<Scope>>,
+    ) -> ExecuteResult<Option<ControlAction>> {
+        for stmt in stmts {
+            if let Some(val) = self.execute_stmt(stmt, scope)? {
+                return Ok(Some(val));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn execute_stmt(
+        &mut self,
+        stmt: &Stmt,
+        scope: &Rc<RefCell<Scope>>,
+    ) -> ExecuteResult<Option<ControlAction>> {
+        let result = match stmt {
+            Stmt::Expr(expr) => {
+                self.eval_expr(expr, scope)?;
+                None
+            }
+            Stmt::Block(stmts) => {
+                let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+                self.execute_stmts(stmts, &new_scope)?
+            }
+            Stmt::If {
+                cond,
+                stmt,
+                else_stmt,
+            } => {
+                if *self.eval_expr(cond, scope)?.as_bool()? {
+                    let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+                    self.execute_stmt(stmt, &new_scope)?
+                } else if let Some(else_stmt) = else_stmt.as_ref() {
+                    let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+                    self.execute_stmt(else_stmt, &new_scope)?
+                } else {
+                    None
+                }
+            }
+            Stmt::While { cond, stmt } => {
+                let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+
+                loop {
+                    if !*self.eval_expr(cond, scope)?.as_bool()? {
+                        break None;
+                    }
+
+                    match self.execute_stmt(stmt, &new_scope)? {
+                        Some(ControlAction::Break) => break None,
+                        Some(ControlAction::Continue) => {}
+                        Some(ControlAction::Return(val)) => break Some(ControlAction::Return(val)),
+                        None => {}
+                    }
+                }
+            }
+            Stmt::Loop(stmt) => {
+                let new_scope = Rc::new(RefCell::new(Scope::over(scope)));
+
+                loop {
+                    match self.execute_stmt(stmt, &new_scope)? {
+                        Some(ControlAction::Break) => break None,
+                        Some(ControlAction::Continue) => {}
+                        Some(ControlAction::Return(val)) => break Some(ControlAction::Return(val)),
+                        None => {}
+                    }
+                }
+            }
+            Stmt::Return(expr) => {
+                let expr_val = expr
+                    .as_ref()
+                    .map(|expr| self.eval_expr(expr, scope))
+                    .transpose()?;
+
+                Some(ControlAction::Return(expr_val))
+            }
+            Stmt::Break => Some(ControlAction::Break),
+            Stmt::Continue => Some(ControlAction::Continue),
+            Stmt::Assign(lval, expr) => {
+                let val = self.eval_expr(expr, scope)?;
+                self.assign_lval(lval, scope, val)?;
+                None
+            }
+            Stmt::AssignInPlace(op, lval, expr) => {
+                let val = self.eval_expr(expr, scope)?;
+                let op = *op;
+
+                self.with_lval(
+                    lval,
+                    scope,
+                    Box::new(move |dst| {
+                        match (dst, op) {
+                            (Value::Int(n), InPlaceOp::Add) => *n += val.as_int()?,
+                            (Value::Int(n), InPlaceOp::Sub) => *n -= val.as_int()?,
+                            (Value::Int(n), InPlaceOp::Mul) => *n *= val.as_int()?,
+                            (Value::Int(n), InPlaceOp::Div) => *n /= val.as_int()?,
+                            (Value::Int(n), InPlaceOp::Mod) => *n %= val.as_int()?,
+                            (Value::List(items), InPlaceOp::Add) => items.borrow_mut().push(val),
+                            (Value::Str(s), InPlaceOp::Add) => {
+                                let val_str = val.to_string();
+                                s.borrow_mut().push_str(&val_str);
+                            }
+                            (dst_val, op) => {
+                                return Err(ExecuteError::InvalidAssignOp {
+                                    dst_kind: dst_val.kind(),
+                                    op,
+                                });
+                            }
+                        }
+                        Ok(())
+                    }),
+                )?;
+
+                None
+            }
+        };
+
+        Ok(result)
+    }
+
+    fn assign_lval(
+        &mut self,
+        lval: &LValue,
+        scope: &Rc<RefCell<Scope>>,
+        val: Value,
+    ) -> ExecuteResult<()> {
+        match lval {
+            LValue::Iden(name) => {
+                scope.borrow_mut().set(name.clone(), val);
+                Ok(())
+            }
+            LValue::Access(sub_lval, idx_expr) => {
+                let idx_val = self.eval_expr(idx_expr, scope)?;
+
+                self.with_lval(
+                    sub_lval,
+                    scope,
+                    Box::new(move |dst| match dst {
+                        Value::List(items) => {
+                            let idx_int = *idx_val.as_int()?;
+
+                            let mut items_ref = items.borrow_mut();
+                            let dst_item = idx_int
+                                .try_into()
+                                .ok()
+                                .and_then(|i: usize| items_ref.get_mut(i))
+                                .ok_or(ExecuteError::IndexOutOfBounds(idx_int))?;
+
+                            *dst_item = val;
+                            Ok(())
+                        }
+                        Value::Dict(items) => {
+                            let idx_sym = DictKey::try_from(idx_val.clone())?;
+
+                            let mut items_ref = items.borrow_mut();
+                            items_ref.insert(idx_sym, val);
+                            Ok(())
+                        }
+                        _ => todo!(),
+                    }),
+                )
+            }
+        }
+    }
+
+    fn with_lval(
+        &mut self,
+        lval: &LValue,
+        scope: &Rc<RefCell<Scope>>,
+        f: Box<ValueModifier>,
+    ) -> ExecuteResult<()> {
+        match lval {
+            LValue::Iden(name) => {
+                if !scope.borrow_mut().with_var(name, f)? {
+                    Err(ExecuteError::UndeclaredVariable(name.clone()))
+                } else {
+                    Ok(())
+                }
+            }
+            LValue::Access(sub_lval, idx_expr) => {
+                let idx_val = self.eval_expr(idx_expr, scope)?;
+
+                self.with_lval(
+                    sub_lval,
+                    scope,
+                    Box::new(move |val| match val {
+                        Value::List(items) => {
+                            let idx_int = *idx_val.as_int()?;
+
+                            let mut items_ref = items.borrow_mut();
+                            let val = idx_int
+                                .try_into()
+                                .ok()
+                                .and_then(|i: usize| items_ref.get_mut(i))
+                                .ok_or(ExecuteError::IndexOutOfBounds(idx_int))?;
+
+                            f(val)
+                        }
+                        Value::Dict(items) => {
+                            let idx_sym = DictKey::try_from(idx_val.clone())?;
+
+                            let mut items_ref = items.borrow_mut();
+                            let val = items_ref
+                                .get_mut(&idx_sym)
+                                .ok_or(ExecuteError::DictKeyNotFound(idx_sym))?;
+
+                            f(val)
+                        }
+                        _ => todo!(),
+                    }),
+                )
+            }
+        }
+    }
+
+    fn eval_expr(&mut self, expr: &Expr, scope: &Rc<RefCell<Scope>>) -> ExecuteResult<Value> {
+        match expr {
+            Expr::Int(n) => Ok(Value::Int(*n as i64)),
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::Null => Ok(Value::Null),
+            Expr::Iden(name) => scope
+                .borrow()
+                .get_cloned(name)
+                .ok_or_else(|| ExecuteError::UndeclaredVariable(name.clone())),
+            Expr::Str(s) => Ok(Value::str(s.clone())),
+            Expr::List(item_exprs) => {
+                let items = item_exprs
+                    .iter()
+                    .map(|expr| self.eval_expr(expr, scope))
+                    .collect::<Result<_, _>>()?;
+
+                Ok(Value::list(items))
+            }
+            Expr::Dict(entry_exprs) => {
+                let mut items = HashMap::new();
+
+                for (key_expr, val_expr) in entry_exprs {
+                    let key = self.eval_expr(key_expr, scope)?;
+                    let key_sym = DictKey::try_from(key)?;
+
+                    let val = self.eval_expr(val_expr, scope)?;
+
+                    items.insert(key_sym, val);
+                }
+
+                Ok(Value::dict(items))
+            }
+            Expr::BinOp(op, lhs, rhs) => match op {
+                BinOp::Add => {
+                    let lhs_val = self.eval_expr(lhs, scope)?;
+                    let rhs_val = self.eval_expr(rhs, scope)?;
+
+                    match (lhs_val, rhs_val) {
+                        (lhs_val, Value::Str(rhs_str)) => {
+                            let mut s_result = lhs_val.to_string();
+                            s_result.push_str(&rhs_str.borrow());
+                            Ok(Value::str(s_result))
+                        }
+                        (Value::Str(lhs_str), rhs_val) => {
+                            let mut s_result = lhs_str.borrow().clone();
+                            s_result.push_str(&rhs_val.to_string());
+                            Ok(Value::str(s_result))
+                        }
+                        (lhs_val, rhs_val) => Ok(Value::Int(lhs_val.as_int()? + rhs_val.as_int()?)),
+                    }
+                }
+                BinOp::Sub => {
+                    let lhs_val = *self.eval_expr(lhs, scope)?.as_int()?;
+                    let rhs_val = *self.eval_expr(rhs, scope)?.as_int()?;
+                    Ok(Value::Int(lhs_val - rhs_val))
+                }
+                BinOp::Mul => {
+                    let lhs_val = *self.eval_expr(lhs, scope)?.as_int()?;
+                    let rhs_val = *self.eval_expr(rhs, scope)?.as_int()?;
+                    Ok(Value::Int(lhs_val * rhs_val))
+                }
+                BinOp::Div => {
+                    let lhs_val = *self.eval_expr(lhs, scope)?.as_int()?;
+                    let rhs_val = *self.eval_expr(rhs, scope)?.as_int()?;
+                    Ok(Value::Int(lhs_val / rhs_val))
+                }
+                BinOp::Mod => {
+                    let lhs_val = *self.eval_expr(lhs, scope)?.as_int()?;
+                    let rhs_val = *self.eval_expr(rhs, scope)?.as_int()?;
+                    Ok(Value::Int(lhs_val % rhs_val))
+                }
+                BinOp::BoolAnd => Ok(Value::Bool(
+                    *self.eval_expr(lhs, scope)?.as_bool()?
+                        && *self.eval_expr(rhs, scope)?.as_bool()?,
+                )),
+                BinOp::BoolOr => Ok(Value::Bool(
+                    *self.eval_expr(lhs, scope)?.as_bool()?
+                        || *self.eval_expr(rhs, scope)?.as_bool()?,
+                )),
+            },
+            Expr::UnaryOp(op, expr) => {
+                let val = self.eval_expr(expr, scope)?;
+
+                match op {
+                    UnaryOp::Plus => Ok(Value::Int(*val.as_int()?)),
+                    UnaryOp::Minus => Ok(Value::Int(-*val.as_int()?)),
+                    UnaryOp::BoolNot => Ok(Value::Bool(!*val.as_bool()?)),
+                }
+            }
+            Expr::Rel(rel, lhs, rhs) => {
+                let lhs_val = self.eval_expr(lhs, scope)?;
+                let rhs_val = self.eval_expr(rhs, scope)?;
+
+                let result = match rel {
+                    Rel::Eq => lhs_val == rhs_val,
+                    Rel::Neq => lhs_val != rhs_val,
+                    Rel::Gt => lhs_val.as_int()? > rhs_val.as_int()?,
+                    Rel::Geq => lhs_val.as_int()? >= rhs_val.as_int()?,
+                    Rel::Lt => lhs_val.as_int()? < rhs_val.as_int()?,
+                    Rel::Leq => lhs_val.as_int()? <= rhs_val.as_int()?,
+                };
+
+                Ok(Value::Bool(result))
+            }
+            Expr::Ternary {
+                cond,
+                if_yes,
+                if_no,
+            } => {
+                if *self.eval_expr(cond, scope)?.as_bool()? {
+                    self.eval_expr(if_yes, scope)
+                } else {
+                    self.eval_expr(if_no, scope)
+                }
+            }
+            Expr::FuncCall(func_name, arg_exprs) => {
+                let args = arg_exprs
+                    .iter()
+                    .map(|expr| self.eval_expr(expr, scope))
+                    .collect::<Result<_, _>>()?;
+
+                Ok(self.execute_func(func_name, args)?.unwrap_or(Value::Null))
+            }
+            Expr::Access { value, idx } => {
+                let value_val = self.eval_expr(value, scope)?;
+                let idx_val = self.eval_expr(idx, scope)?;
+
+                match value_val {
+                    Value::List(items) => {
+                        let idx_int = *idx_val.as_int()?;
+                        let idx_usize: usize = idx_int
+                            .try_into()
+                            .map_err(|_| ExecuteError::IndexOutOfBounds(idx_int))?;
+
+                        items
+                            .borrow()
+                            .get(idx_usize)
+                            .cloned()
+                            .ok_or(ExecuteError::IndexOutOfBounds(idx_int))
+                    }
+                    Value::Str(str_rc) => {
+                        let idx_int = *idx_val.as_int()?;
+                        let idx_usize: usize = idx_int
+                            .try_into()
+                            .map_err(|_| ExecuteError::IndexOutOfBounds(idx_int))?;
+
+                        let str = str_rc.borrow();
+                        let b = str
+                            .as_bytes()
+                            .get(idx_usize)
+                            .copied()
+                            .ok_or(ExecuteError::IndexOutOfBounds(idx_int))?;
+
+                        Ok(Value::str(String::from(b as char)))
+                    }
+                    Value::Dict(items) => {
+                        let idx_sym = DictKey::try_from(idx_val)?;
+                        let val = items
+                            .borrow()
+                            .get(&idx_sym)
+                            .cloned()
+                            .ok_or(ExecuteError::DictKeyNotFound(idx_sym))?;
+
+                        Ok(val)
+                    }
+                    _ => todo!(),
+                }
+            }
+        }
+    }
+}

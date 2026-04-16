@@ -2,7 +2,7 @@ mod print;
 
 use clap::Parser;
 
-use uma_core::{core::SourceFile, executor::Executor, parser::UmaParser, scanner::Scanner};
+use uma_core::{core::SourceFile, interpreter::Interpreter, parser::UmaParser, scanner::Scanner};
 
 #[derive(clap::Parser)]
 struct Args {
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let mut executor = Executor::new(&program);
+    let mut executor = Interpreter::new(&program)?;
     executor.execute()?;
     Ok(())
 }

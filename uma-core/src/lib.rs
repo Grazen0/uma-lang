@@ -1,4 +1,4 @@
 pub mod core;
-pub mod executor;
+pub mod interpreter;
 pub mod parser;
 pub mod scanner;
