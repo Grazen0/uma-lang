@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uma_core::{
     core::SourceFile,
+    fmt::DisplayWithSrcExt,
     parser::{ParseError, UmaParser},
     scanner::Scanner,
 };
@@ -312,7 +313,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
         Diagnostic {
             range,
             code: None,
-            message: error.fmt_with_src(text.contents()),
+            message: format!("{}", error.with_src(text.contents())),
             severity: Some(DiagnosticSeverity::Error),
             source: None,
         }

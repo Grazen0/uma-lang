@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-derive_more = { version = "2.1.1", features = ["error", "display"] }
+derive_more = { version = "2.1.1", features = ["error", "display", "constructor"] }
 kinded = "0.5.0"

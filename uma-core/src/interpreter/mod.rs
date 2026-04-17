@@ -13,7 +13,8 @@ use crate::{
         core::{DictKey, ExecuteError, ExecuteResult, Value},
         scope::{Scope, ValueModifier},
     },
-    parser::{BinOp, Expr, Func, LValue, ModifyOp, Program, Rel, Stmt, UnaryOp},
+    parser::ast::{BinOp, Expr, Func, LValue, ModifyOp, Program, Rel, Stmt, UnaryOp},
+    util::Spanned,
 };
 
 #[derive(Debug, Clone)]
@@ -28,7 +29,7 @@ type BuiltInFn = fn(&mut Interpreter, Vec<Value>) -> ExecuteResult<Option<Value>
 #[derive(Debug, Clone)]
 enum Function<'a> {
     BuiltIn(BuiltInFn),
-    UserDef(&'a Func),
+    UserDef(&'a Spanned<Func>),
 }
 
 #[derive(Debug, Default)]
@@ -83,7 +84,7 @@ impl<'a> Interpreter<'a> {
         let mut user_funcs = FunctionScope::over(GLOBAL_FUNCS.clone());
 
         for func in &program.funcs {
-            user_funcs.insert(func.name.clone(), Function::UserDef(func))?;
+            user_funcs.insert(func.val.name.val.clone(), Function::UserDef(func))?;
         }
 
         Ok(Self {
@@ -93,28 +94,32 @@ impl<'a> Interpreter<'a> {
     }
 
     pub fn execute(&mut self) -> ExecuteResult<()> {
-        self.execute_func("main", vec![])?;
+        self.execute_func(&Spanned::new(0..0, "main".to_string()), vec![])?;
         Ok(())
     }
 
-    fn execute_func(&mut self, func_name: &str, args: Vec<Value>) -> ExecuteResult<Option<Value>> {
+    fn execute_func(
+        &mut self,
+        func_name: &Spanned<String>,
+        args: Vec<Value>,
+    ) -> ExecuteResult<Option<Value>> {
         let func = self
             .user_funcs
-            .get(func_name)
-            .ok_or_else(|| ExecuteError::UndeclaredFunction(func_name.to_string()))?;
+            .get(&func_name.val)
+            .ok_or_else(|| ExecuteError::UndeclaredFunction(func_name.clone()))?;
 
         match func {
             Function::UserDef(func) => {
-                core::expect_arg_count(func.args.len(), args.len())?;
+                core::expect_arg_count(func.val.args.len(), args.len())?;
 
                 let scope = Scope::over(self.global_scope.clone());
 
-                for (arg_name, arg) in func.args.iter().zip(args) {
-                    scope.insert(arg_name.clone(), arg);
+                for (arg_name, arg) in func.val.args.iter().zip(args) {
+                    scope.insert(arg_name.val.clone(), arg);
                 }
 
                 let scope = Rc::new(scope);
-                let result = self.execute_stmts(&func.stmts, &scope)?;
+                let result = self.execute_stmts(&func.val.stmts, &scope)?;
 
                 match result {
                     None => Ok(None),
@@ -129,7 +134,7 @@ impl<'a> Interpreter<'a> {
 
     fn execute_stmts(
         &mut self,
-        stmts: &[Stmt],
+        stmts: &[Spanned<Stmt>],
         scope: &Rc<Scope>,
     ) -> ExecuteResult<Option<ControlAction>> {
         for stmt in stmts {
@@ -143,10 +148,10 @@ impl<'a> Interpreter<'a> {
 
     fn execute_stmt(
         &mut self,
-        stmt: &Stmt,
+        stmt: &Spanned<Stmt>,
         scope: &Rc<Scope>,
     ) -> ExecuteResult<Option<ControlAction>> {
-        let result = match stmt {
+        let result = match &stmt.val {
             Stmt::Expr(expr) => {
                 self.eval_expr(expr, scope)?;
                 None
@@ -220,10 +225,15 @@ impl<'a> Interpreter<'a> {
         Ok(result)
     }
 
-    fn assign_lval(&mut self, lval: &LValue, scope: &Rc<Scope>, val: Value) -> ExecuteResult<()> {
-        match lval {
+    fn assign_lval(
+        &mut self,
+        lval: &Spanned<LValue>,
+        scope: &Rc<Scope>,
+        val: Value,
+    ) -> ExecuteResult<()> {
+        match &lval.val {
             LValue::Iden(name) => {
-                scope.insert(name.clone(), val);
+                scope.insert(name.val.clone(), val);
                 Ok(())
             }
             LValue::Access(sub_lval, idx_expr) => {
@@ -262,13 +272,13 @@ impl<'a> Interpreter<'a> {
 
     fn with_lval(
         &mut self,
-        lval: &LValue,
+        lval: &Spanned<LValue>,
         scope: &Rc<Scope>,
         f: Box<ValueModifier>,
     ) -> ExecuteResult<()> {
-        match lval {
+        match &lval.val {
             LValue::Iden(name) => {
-                if !scope.with_var(name, f)? {
+                if !scope.with_var(&name.val, f)? {
                     Err(ExecuteError::UndeclaredVariable(name.clone()))
                 } else {
                     Ok(())
@@ -310,8 +320,8 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn eval_expr(&mut self, expr: &Expr, scope: &Rc<Scope>) -> ExecuteResult<Value> {
-        match expr {
+    fn eval_expr(&mut self, expr: &Spanned<Expr>, scope: &Rc<Scope>) -> ExecuteResult<Value> {
+        match &expr.val {
             Expr::Assign(lval, expr) => {
                 let val = self.eval_expr(expr, scope)?;
                 self.assign_lval(lval, scope, val.clone())?;
@@ -356,7 +366,7 @@ impl<'a> Interpreter<'a> {
             Expr::Bool(b) => Ok(Value::Bool(*b)),
             Expr::Null => Ok(Value::Null),
             Expr::Iden(name) => scope
-                .get_cloned(name)
+                .get_cloned(&name.val)
                 .ok_or_else(|| ExecuteError::UndeclaredVariable(name.clone())),
             Expr::Str(s) => Ok(Value::str(s.clone())),
             Expr::List(item_exprs) => {

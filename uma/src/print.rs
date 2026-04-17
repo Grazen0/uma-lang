@@ -1,17 +1,15 @@
 use std::ops::Range;
 
 use crossterm::style::Stylize;
-use uma_core::{core::SourceFile, parser::ParseError};
+use uma_core::{core::SourceFile, fmt::DisplayWithSrcExt, parser::ParseError};
 
 fn digit_count(n: usize, radix: u32) -> usize {
     (f32::log((n + 1) as f32, radix as f32)).ceil() as usize
 }
 
 fn print_error_header(src: &SourceFile, err: &ParseError) {
-    eprintln!(
-        "{}",
-        format!("{}: {}", "error".red(), err.fmt_with_src(src.contents())).bold()
-    );
+    let s = format!("{}: {}", "error".red(), err.with_src(src.contents()));
+    eprintln!("{}", s.bold());
 }
 
 fn compute_err_byte_range(src: &SourceFile, err: &ParseError) -> Range<usize> {

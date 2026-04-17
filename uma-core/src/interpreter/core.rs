@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use derive_more::{Display, Error};
 use kinded::Kinded;
 
-use crate::parser::ModifyOp;
+use crate::{parser::ast::ModifyOp, util::Spanned};
 
 #[derive(Debug, Clone, Display, Error)]
 pub enum ExecuteError {
@@ -13,8 +13,8 @@ pub enum ExecuteError {
         found: ValueKind,
     },
 
-    #[display("undeclared function `{_0}`.")]
-    UndeclaredFunction(#[error(ignore)] String),
+    #[display("undeclared function `{}`.", _0.val)]
+    UndeclaredFunction(#[error(ignore)] Spanned<String>),
 
     #[display("'break' not used within a loop")]
     UnexpectedBreak,
@@ -22,8 +22,8 @@ pub enum ExecuteError {
     #[display("'continue' not used within a loop")]
     UnexpectedContinue,
 
-    #[display("undeclared variable `{_0}`.")]
-    UndeclaredVariable(#[error(ignore)] String),
+    #[display("undeclared variable `{}`.", _0.val)]
+    UndeclaredVariable(#[error(ignore)] Spanned<String>),
 
     #[display("function expected {expected} argument(s), got {got}.")]
     MismatchedFuncArgs { expected: usize, got: usize },
