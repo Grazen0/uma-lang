@@ -48,11 +48,13 @@
 ] @punctuation.delimiter
 
 (iden) @variable
-(func_name (iden) @function)
-(func_param (iden) @variable.parameter)
+(func_name) @function
+(param_decl) @variable.parameter 
 
 
 (str_lit) @string
+(str_lit (escape_seq) @string.escape) 
+
 (int_lit) @number
 
 [

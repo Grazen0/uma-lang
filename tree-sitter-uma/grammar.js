@@ -14,17 +14,20 @@ module.exports = grammar({
     func: ($) =>
       seq(
         "fn",
-        $.func_name,
+        alias($.iden, $.func_name),
         "(",
         optional(
-          seq($.func_param, repeat(seq(",", $.func_param)), optional(",")),
+          seq(
+            alias($.iden, $.param_decl),
+            repeat(seq(",", alias($.iden, $.param_decl))),
+            optional(","),
+          ),
         ),
         ")",
         "{",
         repeat($.stmt),
         "}",
       ),
-    func_param: ($) => $.iden,
     stmt: ($) =>
       choice(
         prec.left(
@@ -44,14 +47,16 @@ module.exports = grammar({
         seq("break", ";"),
         seq("continue", ";"),
         seq($.expr, ";"),
-        prec(1, seq("{", repeat($.stmt), "}")),
+        alias(prec(1, seq("{", repeat($.stmt), "}")), $.stmt_block),
       ),
 
     expr: ($) => $.assign_expr,
+    assignment: ($) => seq(field("left", $.ter_expr), "=", $.assign_expr),
     assign_expr: ($) =>
-      seq(
+      choice(
         $.ter_expr,
-        optional(seq(choice("=", "+=", "-=", "*=", "/=", "%="), $.assign_expr)),
+        $.assignment,
+        seq($.ter_expr, choice("+=", "-=", "*=", "/=", "%="), $.assign_expr),
       ),
     ter_expr: ($) =>
       seq($.or_expr, optional(seq("?", $.expr, ":", $.ter_expr))),
@@ -73,7 +78,7 @@ module.exports = grammar({
         seq("(", $.expr, ")"),
         $.iden,
         seq(
-          $.func_name,
+          alias($.iden, $.func_name),
           "(",
           optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))),
           ")",
@@ -97,10 +102,14 @@ module.exports = grammar({
         $.str_lit,
       ),
 
-    func_name: ($) => $.iden,
     int_lit: ($) => /\d+/,
-    str_lit: ($) => /"[^"]*"/,
-    iden: ($) => /[a-zA-Z_][a-zA-Z0-9_]*/,
+
+    str_lit: ($) =>
+      seq('"', repeat(choice($.unescaped_string_fragment, $.escape_seq)), '"'),
+    unescaped_string_fragment: (_) => token.immediate(prec(1, /[^"\\\r\n]+/)),
+    escape_seq: ($) => token.immediate(seq("\\", choice("\\", "n", "r", "0"))),
+
+    iden: ($) => /[a-zA-Z_][a-zA-Z\d_]*/,
 
     comment: ($) => token(seq("#", /[^\r\n\u2028\u2029]*/)),
   },

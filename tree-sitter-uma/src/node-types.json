@@ -69,7 +69,37 @@
           "named": true
         },
         {
+          "type": "assignment",
+          "named": true
+        },
+        {
           "type": "ter_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "assignment",
+    "named": true,
+    "fields": {
+      "left": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "ter_expr",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "assign_expr",
           "named": true
         }
       ]
@@ -172,41 +202,11 @@
           "named": true
         },
         {
-          "type": "func_param",
+          "type": "param_decl",
           "named": true
         },
         {
           "type": "stmt",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "func_name",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "iden",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "func_param",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "iden",
           "named": true
         }
       ]
@@ -300,6 +300,44 @@
         {
           "type": "stmt",
           "named": true
+        },
+        {
+          "type": "stmt_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "stmt_block",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "stmt",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "str_lit",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "escape_seq",
+          "named": true
+        },
+        {
+          "type": "unescaped_string_fragment",
+          "named": true
         }
       ]
     }
@@ -348,6 +386,10 @@
   },
   {
     "type": "!=",
+    "named": false
+  },
+  {
+    "type": "\"",
     "named": false
   },
   {
@@ -468,12 +510,20 @@
     "named": false
   },
   {
+    "type": "escape_seq",
+    "named": true
+  },
+  {
     "type": "false",
     "named": false
   },
   {
     "type": "fn",
     "named": false
+  },
+  {
+    "type": "func_name",
+    "named": true
   },
   {
     "type": "iden",
@@ -496,16 +546,20 @@
     "named": false
   },
   {
+    "type": "param_decl",
+    "named": true
+  },
+  {
     "type": "return",
     "named": false
   },
   {
-    "type": "str_lit",
-    "named": true
-  },
-  {
     "type": "true",
     "named": false
+  },
+  {
+    "type": "unescaped_string_fragment",
+    "named": true
   },
   {
     "type": "while",
