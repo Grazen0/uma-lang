@@ -3,14 +3,16 @@ program ::= {func}*
 func ::= "fn" IDEN "(" {IDEN {"," IDEN}*} ")" "{" {stmt}* "}"
 
 stmt ::= "if" "(" expr ")" stmt {"else" stmt}
-stmt ::= "while" "(" expr ")" stmt
+stmt ::= "while" "gramm(" expr ")" {":" "(" expr ")"} stmt
 stmt ::= "loop" stmt
 stmt ::= "return" {expr} ";"
 stmt ::= "break" ";"
 stmt ::= "continue" ";"
-stmt ::= expr {"=" expr} ";"
+stmt ::= "{" {stmt}* "}"
+stmt ::= expr ";"
 
-expr        ::= ter_expr
+expr        ::= assign_expr
+assign_expr ::= ter_expr {("="|"+="|"-="|"*="|"/="|"%=") assign_expr}
 ter_expr    ::= or_expr {"?" expr ":" ter_expr}
 or_expr     ::= {or_expr "||"} and_expr
 and_expr    ::= {and_expr "&&"} eq_expr
@@ -19,12 +21,13 @@ ineq_expr   ::= {ineq_expr ("<"|"<="|">"|">=")} add_expr
 add_expr    ::= {add_expr ("+"|"-")} mul_expr
 mul_expr    ::= {mul_expr ("*"|"/"|"%")} unary_expr
 unary_expr  ::= ("+"|"-"|"!") access_expr
-access_expr ::= base_expr {"[" expr "]"}*
+access_expr ::= access_expr {"[" expr "]"}*
 
 dict_entry ::= expr ":" expr
 
 base_expr ::= "(" expr ")"
 base_expr ::= IDEN {"(" {expr {"," expr}*} ")"}
 base_expr ::= "{" {dict_entry {"," dict_entry}*}  "}"
+base_expr ::= "null"
 base_expr ::= NUM_LIT
 base_expr ::= STR_LIT

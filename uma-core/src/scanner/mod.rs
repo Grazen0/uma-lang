@@ -6,7 +6,7 @@ use crate::util::Spanned;
 
 pub use token::*;
 
-pub fn is_alphanumeric_extended(ch: char) -> bool {
+pub fn is_alphanumeric_ext(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
@@ -45,8 +45,12 @@ impl<'a> Scanner<'a> {
     fn accept_char(&mut self, ch: char) -> bool {
         self.accept(|c| c == ch).is_some()
     }
+}
 
-    fn next_token(&mut self) -> Option<Spanned<Token>> {
+impl<'a> Iterator for Scanner<'a> {
+    type Item = Spanned<Token>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         while self.accept(|ch| ch.is_whitespace()).is_some() {}
 
         let init_byte_pos = self.byte_pos;
@@ -54,7 +58,7 @@ impl<'a> Scanner<'a> {
         let val = match self.next_char()? {
             '#' => {
                 while self.next_char().is_some_and(|ch| ch != '\n') {}
-                return self.next_token();
+                return self.next();
             }
             '+' => {
                 if self.accept_char('=') {
@@ -204,10 +208,10 @@ impl<'a> Scanner<'a> {
                     }
                 })
             }
-            ch if is_alphanumeric_extended(ch) => {
+            ch if is_alphanumeric_ext(ch) => {
                 let mut iden = String::from(ch);
 
-                while let Some(ch) = self.accept(is_alphanumeric_extended) {
+                while let Some(ch) = self.accept(is_alphanumeric_ext) {
                     iden.push(ch);
                 }
 
@@ -230,15 +234,7 @@ impl<'a> Scanner<'a> {
             ch => Token::Error(TokenError::UnexpectedChar(ch)),
         };
 
-        let byte_range = init_byte_pos..self.byte_pos;
-        Some(Spanned::new(byte_range, val))
-    }
-}
-
-impl<'a> Iterator for Scanner<'a> {
-    type Item = Spanned<Token>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_token()
+        let span = init_byte_pos..self.byte_pos;
+        Some(Spanned::new(span, val))
     }
 }
