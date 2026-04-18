@@ -1,16 +1,15 @@
-use std::ops::Range;
-
 use derive_more::{Display, Error};
 
 use crate::{
+    core::SourceFile,
     fmt::DisplayWithSrc,
     parser::ast::Expr,
     scanner::{Token, TokenKind},
-    util::Spanned,
+    util::{Span, Spanned},
 };
 
 impl<T: DisplayWithSrc> DisplayWithSrc for Option<T> {
-    fn fmt_with_src(&self, f: &mut std::fmt::Formatter<'_>, src: &str) -> std::fmt::Result {
+    fn fmt_with_src(&self, f: &mut std::fmt::Formatter<'_>, src: &SourceFile) -> std::fmt::Result {
         match self {
             Some(tok) => tok.fmt_with_src(f, src),
             None => write!(f, "end-of-file"),
@@ -19,7 +18,7 @@ impl<T: DisplayWithSrc> DisplayWithSrc for Option<T> {
 }
 
 impl DisplayWithSrc for Spanned<Token> {
-    fn fmt_with_src(&self, f: &mut std::fmt::Formatter<'_>, src: &str) -> std::fmt::Result {
+    fn fmt_with_src(&self, f: &mut std::fmt::Formatter<'_>, src: &SourceFile) -> std::fmt::Result {
         write!(f, "'{}'", &src[self.span.clone()])
     }
 }
@@ -43,7 +42,7 @@ pub enum ParseError {
 }
 
 impl DisplayWithSrc for ParseError {
-    fn fmt_with_src(&self, f: &mut std::fmt::Formatter<'_>, src: &str) -> std::fmt::Result {
+    fn fmt_with_src(&self, f: &mut std::fmt::Formatter<'_>, src: &SourceFile) -> std::fmt::Result {
         match self {
             Self::UnexpectedToken { found, expected } => {
                 if let Some(exp) = expected {
@@ -72,7 +71,7 @@ impl DisplayWithSrc for ParseError {
 }
 
 impl ParseError {
-    pub fn byte_range(&self) -> Option<Range<usize>> {
+    pub fn span(&self) -> Option<Span> {
         match self {
             Self::UnexpectedToken { found, .. } => found.as_ref().map(|t| t.span.clone()),
             Self::ExpectedExpression { found } => found.as_ref().map(|t| t.span.clone()),

@@ -3,7 +3,7 @@
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_repr::{Deserialize_repr, Serialize_repr};
-use uma_core::core::SourceFile;
+use uma_core::{core::SourceFile, util::Span};
 
 use crate::jsonrpc::{self, ResponseError};
 
@@ -198,9 +198,9 @@ pub struct Position {
     pub character: u32,
 }
 
-impl From<(usize, usize)> for Position {
-    fn from((line, col): (usize, usize)) -> Self {
-        Self::new(line as u32, col as u32)
+impl From<uma_core::util::Position> for Position {
+    fn from(pos: uma_core::util::Position) -> Self {
+        Self::new(pos.line as u32, pos.col as u32)
     }
 }
 
@@ -211,11 +211,9 @@ pub struct Range {
     pub end: Position,
 }
 
-impl Range {
-    pub fn from_span(span: &std::ops::Range<usize>, src: &SourceFile) -> Self {
-        let start = src.byte_to_line(span.start);
-        let end = src.byte_to_line(span.end);
-        Self::new(start.into(), end.into())
+impl From<Span> for Range {
+    fn from(span: Span) -> Self {
+        Self::new(span.start.into(), span.end.into())
     }
 }
 

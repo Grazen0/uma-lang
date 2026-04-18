@@ -2,7 +2,10 @@ mod token;
 
 use std::{iter::Peekable, num::IntErrorKind, str::CharIndices};
 
-use crate::util::Spanned;
+use crate::{
+    core::SourceFile,
+    util::{Span, Spanned},
+};
 
 pub use token::*;
 
@@ -12,14 +15,16 @@ pub fn is_alphanumeric_ext(ch: char) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct Scanner<'a> {
+    source_file: &'a SourceFile,
     chars: Peekable<CharIndices<'a>>,
     byte_pos: usize,
 }
 
 impl<'a> Scanner<'a> {
-    pub fn new(src: &'a str) -> Self {
+    pub fn new(source_file: &'a SourceFile) -> Self {
         Self {
-            chars: src.char_indices().peekable(),
+            source_file,
+            chars: source_file.contents().char_indices().peekable(),
             byte_pos: 0,
         }
     }
@@ -234,7 +239,10 @@ impl<'a> Iterator for Scanner<'a> {
             ch => Token::Error(TokenError::UnexpectedChar(ch)),
         };
 
-        let span = init_byte_pos..self.byte_pos;
+        let start = self.source_file.byte_to_pos(init_byte_pos);
+        let end = self.source_file.byte_to_pos(self.byte_pos);
+        let span = Span::new(start, end);
+
         Some(Spanned::new(span, val))
     }
 }

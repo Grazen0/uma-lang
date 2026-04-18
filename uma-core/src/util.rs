@@ -1,10 +1,20 @@
-use std::ops::Range;
-
 use derive_more::Constructor;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Constructor)]
+pub struct Position {
+    pub line: usize,
+    pub col: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Constructor)]
+pub struct Span {
+    pub start: Position,
+    pub end: Position,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Constructor)]
 pub struct Spanned<T> {
-    pub span: Range<usize>,
+    pub span: Span,
     pub val: T,
 }
 
@@ -35,10 +45,10 @@ pub trait Combine {
     fn combine(&self, other: &Self) -> Self;
 }
 
-impl<T: Ord + Copy> Combine for Range<T> {
+impl Combine for Span {
     fn combine(&self, other: &Self) -> Self {
         let start = Ord::min(self.start, other.start);
         let end = Ord::max(self.end, other.end);
-        start..end
+        Self::new(start, end)
     }
 }

@@ -94,19 +94,15 @@ impl<'a> Interpreter<'a> {
     }
 
     pub fn execute(&mut self) -> ExecuteResult<()> {
-        self.execute_func(&Spanned::new(0..0, "main".to_string()), vec![])?;
+        self.execute_func("main", vec![])?;
         Ok(())
     }
 
-    fn execute_func(
-        &mut self,
-        func_name: &Spanned<String>,
-        args: Vec<Value>,
-    ) -> ExecuteResult<Option<Value>> {
+    fn execute_func(&mut self, func_name: &str, args: Vec<Value>) -> ExecuteResult<Option<Value>> {
         let func = self
             .user_funcs
-            .get(&func_name.val)
-            .ok_or_else(|| ExecuteError::UndeclaredFunction(func_name.clone()))?;
+            .get(func_name)
+            .ok_or_else(|| ExecuteError::UndeclaredFunction(func_name.to_string()))?;
 
         match func {
             Function::UserDef(func) => {
@@ -480,7 +476,9 @@ impl<'a> Interpreter<'a> {
                     .map(|expr| self.eval_expr(expr, scope))
                     .collect::<Result<_, _>>()?;
 
-                Ok(self.execute_func(func_name, args)?.unwrap_or(Value::Null))
+                Ok(self
+                    .execute_func(&func_name.val, args)?
+                    .unwrap_or(Value::Null))
             }
             Expr::Access { value, idx } => {
                 let value_val = self.eval_expr(value, scope)?;

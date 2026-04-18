@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let src = SourceFile::from_path(&args.filename)?;
 
-    let mut scanner = Scanner::new(src.contents());
+    let mut scanner = Scanner::new(&src);
     let mut parser = UmaParser::new(&mut scanner);
 
     let program = match parser.program_to_end() {

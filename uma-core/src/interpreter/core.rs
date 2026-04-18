@@ -13,8 +13,8 @@ pub enum ExecuteError {
         found: ValueKind,
     },
 
-    #[display("undeclared function `{}`.", _0.val)]
-    UndeclaredFunction(#[error(ignore)] Spanned<String>),
+    #[display("undeclared function `{_0}`.")]
+    UndeclaredFunction(#[error(ignore)] String),
 
     #[display("'break' not used within a loop")]
     UnexpectedBreak,

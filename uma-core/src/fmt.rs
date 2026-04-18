@@ -2,14 +2,16 @@ use std::fmt;
 
 use derive_more::Constructor;
 
+use crate::core::SourceFile;
+
 pub trait DisplayWithSrc {
-    fn fmt_with_src(&self, f: &mut fmt::Formatter<'_>, src: &str) -> fmt::Result;
+    fn fmt_with_src(&self, f: &mut fmt::Formatter<'_>, src: &SourceFile) -> fmt::Result;
 }
 
 #[derive(Debug, Clone, Constructor)]
 pub struct WithSrc<'a, T> {
     value: &'a T,
-    src: &'a str,
+    src: &'a SourceFile,
 }
 
 impl<'a, T: DisplayWithSrc> fmt::Display for WithSrc<'a, T> {
@@ -19,7 +21,7 @@ impl<'a, T: DisplayWithSrc> fmt::Display for WithSrc<'a, T> {
 }
 
 pub trait DisplayWithSrcExt: DisplayWithSrc {
-    fn with_src<'a>(&'a self, src: &'a str) -> WithSrc<'a, Self>
+    fn with_src<'a>(&'a self, src: &'a SourceFile) -> WithSrc<'a, Self>
     where
         Self: Sized,
     {

@@ -277,8 +277,8 @@ impl<I: BufRead, O: Write> Server<I, O> {
                 name: func.val.name.val.clone(),
                 detail: None,
                 kind: SymbolKind::Function,
-                range: Range::from_span(&func.span, &buf.src),
-                selection_range: Range::from_span(&func.val.name.span, &buf.src),
+                range: func.span.clone().into(),
+                selection_range: func.val.name.span.clone().into(),
                 children: None,
             })
             .collect();
@@ -330,7 +330,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
     fn update_buffer(&mut self, uri: &str, version: i32) -> anyhow::Result<()> {
         let buf = self.buffers.get(uri).unwrap();
 
-        let mut scanner = Scanner::new(buf.src.contents());
+        let mut scanner = Scanner::new(&buf.src);
         let mut parser = UmaParser::new(&mut scanner);
 
         let (ast, diagnostics) = match parser.program_to_end() {
@@ -366,24 +366,20 @@ impl<I: BufRead, O: Write> Server<I, O> {
         Ok(())
     }
 
-    fn error_to_diagnostic(&self, error: ParseError, text: &SourceFile) -> Diagnostic {
-        let range = error.byte_range().map_or_else(
+    fn error_to_diagnostic(&self, error: ParseError, src: &SourceFile) -> Diagnostic {
+        let range = error.span().map_or_else(
             || {
-                let start_pos: Position = text.end_pos().into();
+                let start_pos: Position = src.end_pos().into();
                 let end_pos = Position::new(start_pos.line, start_pos.character + 1);
                 Range::new(start_pos, end_pos)
             },
-            |r| {
-                let start_pos = text.byte_to_line(r.start);
-                let end_pos = text.byte_to_line(r.end);
-                Range::new(start_pos.into(), end_pos.into())
-            },
+            Range::from,
         );
 
         Diagnostic {
             range,
             code: None,
-            message: format!("{}", error.with_src(text.contents())),
+            message: format!("{}", error.with_src(src)),
             severity: Some(DiagnosticSeverity::Error),
             source: None,
         }
