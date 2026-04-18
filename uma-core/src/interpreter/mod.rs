@@ -339,7 +339,8 @@ impl<'a> Interpreter<'a> {
                             (Value::Int(n), ModifyOp::Div) => *n /= val_clone.as_int()?,
                             (Value::Int(n), ModifyOp::Mod) => *n %= val_clone.as_int()?,
                             (Value::List(items), ModifyOp::Add) => {
-                                items.borrow_mut().push(val_clone)
+                                let val_list = val_clone.as_list()?;
+                                items.borrow_mut().append(&mut val_list.borrow().clone());
                             }
                             (Value::Str(s), ModifyOp::Add) => {
                                 let val_str = val_clone.to_string();
@@ -394,14 +395,19 @@ impl<'a> Interpreter<'a> {
 
                     match (lhs_val, rhs_val) {
                         (lhs_val, Value::Str(rhs_str)) => {
-                            let mut s_result = lhs_val.to_string();
-                            s_result.push_str(&rhs_str.borrow());
-                            Ok(Value::str(s_result))
+                            let mut out_str = lhs_val.to_string();
+                            out_str.push_str(&rhs_str.borrow());
+                            Ok(Value::str(out_str))
                         }
                         (Value::Str(lhs_str), rhs_val) => {
-                            let mut s_result = lhs_str.borrow().clone();
-                            s_result.push_str(&rhs_val.to_string());
-                            Ok(Value::str(s_result))
+                            let mut out_str = lhs_str.borrow().clone();
+                            out_str.push_str(&rhs_val.to_string());
+                            Ok(Value::str(out_str))
+                        }
+                        (Value::List(lhs), Value::List(rhs)) => {
+                            let mut out_items = lhs.borrow().clone();
+                            out_items.append(&mut rhs.borrow().clone());
+                            Ok(Value::list(out_items))
                         }
                         (lhs_val, rhs_val) => Ok(Value::Int(lhs_val.as_int()? + rhs_val.as_int()?)),
                     }

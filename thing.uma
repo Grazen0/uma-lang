@@ -27,10 +27,10 @@ fn matmul(a, b) {
             while (k < n) : (k += 1) 
                 sum += a[i][k] * b[k][j];
 
-            row += sum;
+            row += [sum];
         }
 
-        out += row;
+        out += [row];
     }
 
     return out;
