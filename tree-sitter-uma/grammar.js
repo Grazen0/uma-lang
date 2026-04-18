@@ -47,8 +47,10 @@ module.exports = grammar({
         seq("break", ";"),
         seq("continue", ";"),
         seq($.expr, ";"),
-        alias(prec(1, seq("{", repeat($.stmt), "}")), $.stmt_block),
+        $.stmt_blk,
       ),
+
+    stmt_blk: ($) => prec(1, seq("{", repeat($.stmt), "}")),
 
     expr: ($) => $.assign_expr,
     assignment: ($) => seq(field("left", $.ter_expr), "=", $.assign_expr),

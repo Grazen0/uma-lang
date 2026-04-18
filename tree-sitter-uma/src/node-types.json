@@ -302,14 +302,14 @@
           "named": true
         },
         {
-          "type": "stmt_block",
+          "type": "stmt_blk",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "stmt_block",
+    "type": "stmt_blk",
     "named": true,
     "fields": {},
     "children": {
