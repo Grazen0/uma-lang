@@ -438,7 +438,7 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
         } else if let Some(tok) = self.accept_token(TokenKind::BoolLit) {
             Ok(tok.map(Token::assume_bool_lit).map(Expr::BoolLit))
         } else if let Some(tok) = self.accept_token(TokenKind::Null) {
-            Ok(tok.map(|_| Expr::Null))
+            Ok(tok.map(|_| Expr::NullLit))
         } else if let Some(lb_tok) = self.accept_token(TokenKind::LBrace) {
             let mut items = vec![];
 
@@ -453,7 +453,7 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
             }
 
             let rb_tok = self.expect(TokenKind::RBrace)?;
-            Ok(Spanned::merge(lb_tok, rb_tok, |_, _| Expr::Dict(items)))
+            Ok(Spanned::merge(lb_tok, rb_tok, |_, _| Expr::DictLit(items)))
         } else if let Some(lb_tok) = self.accept_token(TokenKind::LBracket) {
             let mut items = vec![];
 
@@ -468,7 +468,7 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
             }
 
             let rb_tok = self.expect(TokenKind::RBracket)?;
-            Ok(Spanned::merge(lb_tok, rb_tok, |_, _| Expr::List(items)))
+            Ok(Spanned::merge(lb_tok, rb_tok, |_, _| Expr::ListLit(items)))
         } else if let Some(tok) = self.accept_token(TokenKind::Iden) {
             let name = tok.map(Token::assume_iden);
 

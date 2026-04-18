@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-enum ControlAction {
+enum ControlFlow {
     Return(Option<Value>),
     Break,
     Continue,
@@ -119,9 +119,9 @@ impl<'a> Interpreter<'a> {
 
                 match result {
                     None => Ok(None),
-                    Some(ControlAction::Break) => Err(ExecuteError::UnexpectedBreak),
-                    Some(ControlAction::Continue) => Err(ExecuteError::UnexpectedContinue),
-                    Some(ControlAction::Return(val)) => Ok(val),
+                    Some(ControlFlow::Break) => Err(ExecuteError::UnexpectedBreak),
+                    Some(ControlFlow::Continue) => Err(ExecuteError::UnexpectedContinue),
+                    Some(ControlFlow::Return(val)) => Ok(val),
                 }
             }
             Function::BuiltIn(f) => f(self, args),
@@ -132,7 +132,7 @@ impl<'a> Interpreter<'a> {
         &mut self,
         stmts: &[Spanned<Stmt>],
         scope: &Rc<Scope>,
-    ) -> ExecuteResult<Option<ControlAction>> {
+    ) -> ExecuteResult<Option<ControlFlow>> {
         for stmt in stmts {
             if let Some(val) = self.execute_stmt(stmt, scope)? {
                 return Ok(Some(val));
@@ -146,7 +146,7 @@ impl<'a> Interpreter<'a> {
         &mut self,
         stmt: &Spanned<Stmt>,
         scope: &Rc<Scope>,
-    ) -> ExecuteResult<Option<ControlAction>> {
+    ) -> ExecuteResult<Option<ControlFlow>> {
         let result = match &stmt.val {
             Stmt::Expr(expr) => {
                 self.eval_expr(expr, scope)?;
@@ -184,9 +184,9 @@ impl<'a> Interpreter<'a> {
                     }
 
                     match self.execute_stmt(stmt, &new_scope)? {
-                        Some(ControlAction::Break) => break None,
-                        Some(ControlAction::Return(val)) => break Some(ControlAction::Return(val)),
-                        None | Some(ControlAction::Continue) => {
+                        Some(ControlFlow::Break) => break None,
+                        Some(ControlFlow::Return(val)) => break Some(ControlFlow::Return(val)),
+                        None | Some(ControlFlow::Continue) => {
                             if let Some(expr) = cont_expr {
                                 self.eval_expr(expr, scope)?;
                             }
@@ -199,9 +199,9 @@ impl<'a> Interpreter<'a> {
 
                 loop {
                     match self.execute_stmt(stmt, &new_scope)? {
-                        Some(ControlAction::Break) => break None,
-                        Some(ControlAction::Continue) => {}
-                        Some(ControlAction::Return(val)) => break Some(ControlAction::Return(val)),
+                        Some(ControlFlow::Break) => break None,
+                        Some(ControlFlow::Continue) => {}
+                        Some(ControlFlow::Return(val)) => break Some(ControlFlow::Return(val)),
                         None => {}
                     }
                 }
@@ -212,10 +212,10 @@ impl<'a> Interpreter<'a> {
                     .map(|expr| self.eval_expr(expr, scope))
                     .transpose()?;
 
-                Some(ControlAction::Return(expr_val))
+                Some(ControlFlow::Return(expr_val))
             }
-            Stmt::Break => Some(ControlAction::Break),
-            Stmt::Continue => Some(ControlAction::Continue),
+            Stmt::Break => Some(ControlFlow::Break),
+            Stmt::Continue => Some(ControlFlow::Continue),
         };
 
         Ok(result)
@@ -361,12 +361,12 @@ impl<'a> Interpreter<'a> {
             }
             Expr::IntLit(n) => Ok(Value::Int(*n as i64)),
             Expr::BoolLit(b) => Ok(Value::Bool(*b)),
-            Expr::Null => Ok(Value::Null),
+            Expr::NullLit => Ok(Value::Null),
             Expr::Iden(name) => scope
                 .get_cloned(&name.val)
                 .ok_or_else(|| ExecuteError::UndeclaredVariable(name.clone())),
             Expr::StrLit(s) => Ok(Value::str(s.clone())),
-            Expr::List(item_exprs) => {
+            Expr::ListLit(item_exprs) => {
                 let items = item_exprs
                     .iter()
                     .map(|expr| self.eval_expr(expr, scope))
@@ -374,7 +374,7 @@ impl<'a> Interpreter<'a> {
 
                 Ok(Value::list(items))
             }
-            Expr::Dict(entry_exprs) => {
+            Expr::DictLit(entry_exprs) => {
                 let mut items = HashMap::new();
 
                 for (key_expr, val_expr) in entry_exprs {

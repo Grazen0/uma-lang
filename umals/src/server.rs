@@ -11,17 +11,19 @@ use uma_core::{
     fmt::DisplayWithSrcExt,
     parser::{ParseError, UmaParser, ast::Program},
     scanner::Scanner,
+    semantic::SemanticModel,
 };
 
 use crate::{
     jsonrpc::{self, Request, Response},
     structs::{
-        Capability, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+        Capability, DefinitionParams, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol,
-        DocumentSymbolParams, InitializeParams, InitializedParams, LogMessageParams, MessageType,
-        OutNotification, Position, PositionEncodingKind, PublishDiagnosticsParams, Range,
+        DocumentSymbolParams, InitializeParams, InitializedParams, Location, LogMessageParams,
+        MessageType, OutNotification, Position, PositionEncodingKind, PrepareRenameParams,
+        PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams,
         RequestError, RequestHandlerResult, RequestResult, ServerCapabilities, ShowMessageParams,
-        SymbolKind, TextDocumentSyncKind,
+        SymbolKind, TextDocumentSyncKind, TextEdit, WorkspaceEdit,
     },
 };
 
@@ -52,6 +54,7 @@ pub enum FatalError {
 struct Buffer {
     src: SourceFile,
     ast: Option<Program>,
+    sem_model: Option<SemanticModel>,
 }
 
 impl Buffer {
@@ -59,6 +62,7 @@ impl Buffer {
         Self {
             src: SourceFile::from_contents(src),
             ast: None,
+            sem_model: None,
         }
     }
 }
@@ -150,7 +154,11 @@ impl<I: BufRead, O: Write> Server<I, O> {
             req.method.as_str(),
             "initialize" => handle_initialize,
             "shutdown" => handle_shutdown,
+            "textDocument/definition" => handle_definition,
+            "textDocument/references" => handle_references,
             "textDocument/documentSymbol" => handle_document_symbol,
+            "textDocument/prepareRename" => handle_prepare_rename,
+            "textDocument/rename" => handle_rename,
             _ => Err(RequestError::MethodNotFound)
 
         };
@@ -221,10 +229,11 @@ impl<I: BufRead, O: Write> Server<I, O> {
             PositionEncodingKind::Utf32,
         ];
 
-        let available_encodings = params
-            .capabilities
-            .general
-            .map(|g| g.position_encodings)
+        let general_capabilities = params.capabilities.general.as_ref();
+        let doc_capabilities = params.capabilities.text_document.as_ref();
+
+        let available_encodings = general_capabilities
+            .map(|g| g.position_encodings.clone())
             .unwrap_or_else(|| vec![PositionEncodingKind::Utf16]);
 
         let chosen_encoding_opt = encoding_priority
@@ -235,18 +244,34 @@ impl<I: BufRead, O: Write> Server<I, O> {
             return Ok(Err(RequestError::InitializeError { retry: false }));
         };
 
-        let support_symbols = params
-            .capabilities
-            .text_document
-            .as_ref()
+        let support_symbols = doc_capabilities
             .and_then(|doc| doc.document_symbol.as_ref())
             .and_then(|sym| sym.symbol_kind.as_ref())
             .is_some_and(|sym_kind| sym_kind.value_set.is_some());
+
+        let supports_definition = doc_capabilities.is_some_and(|doc| doc.definition.is_some());
+        let supports_references = doc_capabilities.is_some_and(|doc| doc.references.is_some());
+        let supports_rename = doc_capabilities.is_some_and(|doc| doc.rename.is_some());
+        let supports_prepare_rename = doc_capabilities
+            .and_then(|doc| doc.rename.as_ref())
+            .is_some_and(|rename| rename.prepare_support.is_some_and(|b| b));
+
         Ok(Ok(RequestResult::Initialize {
             capabilities: ServerCapabilities {
                 position_encoding: Some(chosen_encoding),
                 text_document_sync: Some(TextDocumentSyncKind::Full),
-                document_symbol_provider: support_symbols.then_some(Capability::Supported(true)),
+                document_symbol_provider: Some(Capability::Supported(support_symbols)),
+                definition_provider: Some(Capability::Supported(supports_definition)),
+                references_provider: Some(Capability::Supported(supports_references)),
+                rename_provider: supports_rename.then_some({
+                    if supports_prepare_rename {
+                        Capability::WithOptions(RenameOptions {
+                            prepare_provider: Some(supports_prepare_rename),
+                        })
+                    } else {
+                        Capability::Supported(true)
+                    }
+                }),
             },
         }))
     }
@@ -256,6 +281,58 @@ impl<I: BufRead, O: Write> Server<I, O> {
         self.show(MessageType::Info, "Shutting down server...".to_string())?;
         self.buffers.clear();
         Ok(Ok(RequestResult::Shutdown))
+    }
+
+    fn handle_definition(
+        &mut self,
+        params: DefinitionParams,
+    ) -> anyhow::Result<RequestHandlerResult> {
+        let Some(buf) = self.buffers.get(&params.pos.text_document.uri) else {
+            return Ok(Err(RequestError::InvalidParams));
+        };
+
+        let model = buf.sem_model.as_ref();
+
+        let Some(symbol) = model.and_then(|m| m.symbol_lookup(params.pos.position.into())) else {
+            return Ok(Ok(RequestResult::DocumentSymbol(None)));
+        };
+
+        let loc = Location {
+            uri: params.pos.text_document.uri,
+            range: symbol.name.span.clone().into(),
+        };
+
+        Ok(Ok(RequestResult::Definition(Some(loc))))
+    }
+
+    fn handle_references(
+        &mut self,
+        params: ReferenceParams,
+    ) -> anyhow::Result<RequestHandlerResult> {
+        let Some(buf) = self.buffers.get(&params.pos.text_document.uri) else {
+            return Ok(Err(RequestError::InvalidParams));
+        };
+
+        let model = buf.sem_model.as_ref();
+
+        let Some(symbol) = model.and_then(|m| m.symbol_lookup(params.pos.position.into())) else {
+            return Ok(Ok(RequestResult::References(None)));
+        };
+
+        let uri = &params.pos.text_document.uri;
+
+        let mut locs: Vec<_> = symbol
+            .refs
+            .iter()
+            .map(|span| Location::new(uri.clone(), span.clone().into()))
+            .collect();
+
+        if params.context.include_declaration {
+            let def_span = symbol.name.span.clone();
+            locs.push(Location::new(uri.clone(), def_span.into()));
+        }
+
+        Ok(Ok(RequestResult::References(Some(locs))))
     }
 
     fn handle_document_symbol(
@@ -286,6 +363,54 @@ impl<I: BufRead, O: Write> Server<I, O> {
         Ok(Ok(RequestResult::DocumentSymbol(Some(symbols))))
     }
 
+    fn handle_prepare_rename(
+        &mut self,
+        params: PrepareRenameParams,
+    ) -> anyhow::Result<RequestHandlerResult> {
+        let Some(buf) = self.buffers.get(&params.pos.text_document.uri) else {
+            return Ok(Err(RequestError::InvalidParams));
+        };
+
+        let model = buf.sem_model.as_ref();
+
+        let Some(symbol) = model.and_then(|m| m.symbol_lookup(params.pos.position.into())) else {
+            return Ok(Ok(RequestResult::PrepareRename(None)));
+        };
+
+        Ok(Ok(RequestResult::PrepareRename(Some(
+            symbol.name.span.clone().into(),
+        ))))
+    }
+
+    fn handle_rename(&mut self, params: RenameParams) -> anyhow::Result<RequestHandlerResult> {
+        let uri = &params.pos.text_document.uri;
+        let Some(buf) = self.buffers.get(uri) else {
+            return Ok(Err(RequestError::InvalidParams));
+        };
+
+        let Some(symbol) = buf
+            .sem_model
+            .as_ref()
+            .and_then(|m| m.symbol_lookup(params.pos.position.into()))
+        else {
+            return Ok(Ok(RequestResult::Rename(None)));
+        };
+
+        let mut locs: Vec<_> = symbol.refs.clone();
+        locs.push(symbol.name.span.clone());
+
+        let change_list = locs
+            .into_iter()
+            .map(|span| TextEdit::new(span.into(), params.new_name.clone()))
+            .collect();
+
+        let changes = HashMap::from([(uri.clone(), change_list)]);
+
+        Ok(Ok(RequestResult::Rename(Some(WorkspaceEdit {
+            changes: Some(changes),
+        }))))
+    }
+
     // Notification handlers ==================================================
 
     fn handle_initialized(&mut self, _params: InitializedParams) -> anyhow::Result<()> {
@@ -295,8 +420,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
 
     fn handle_did_open(&mut self, params: DidOpenTextDocumentParams) -> anyhow::Result<()> {
         let doc = params.text_document;
-        self.update_buffer_src(doc.uri.clone(), doc.text);
-        self.update_buffer(&doc.uri, doc.version)?;
+        self.update_buffer(doc.uri.clone(), doc.version, doc.text)?;
         Ok(())
     }
 
@@ -305,10 +429,9 @@ impl<I: BufRead, O: Write> Server<I, O> {
 
         for change in params.content_changes {
             assert!(change.range.is_none()); // not supported yet
-            self.update_buffer_src(doc.uri.clone(), change.text);
+            self.update_buffer(doc.uri.clone(), doc.version, change.text)?;
         }
 
-        self.update_buffer(&doc.uri, doc.version)?;
         Ok(())
     }
 
@@ -323,30 +446,33 @@ impl<I: BufRead, O: Write> Server<I, O> {
     }
 
     // Other ==================================================================
-    fn update_buffer_src(&mut self, uri: String, src: String) {
-        self.buffers.insert(uri, Buffer::new(src));
-    }
 
-    fn update_buffer(&mut self, uri: &str, version: i32) -> anyhow::Result<()> {
-        let buf = self.buffers.get(uri).unwrap();
+    fn update_buffer(&mut self, uri: String, version: i32, src: String) -> anyhow::Result<()> {
+        self.buffers.remove(&uri);
+
+        let mut buf = Buffer::new(src);
 
         let mut scanner = Scanner::new(&buf.src);
         let mut parser = UmaParser::new(&mut scanner);
 
-        let (ast, diagnostics) = match parser.program_to_end() {
-            Ok(ast) => (Some(ast), vec![]),
+        match parser.program_to_end() {
+            Ok(ast) => {
+                buf.ast = Some(ast);
+                self.publish_diagnostics(&uri, version, vec![])?;
+            }
             Err(errors) => {
-                let diags = errors
+                let diagnostics = errors
                     .into_iter()
-                    .map(|err| self.error_to_diagnostic(err, &buf.src))
+                    .map(|err| Self::error_to_diagnostic(err, &buf.src))
                     .collect();
 
-                (None, diags)
+                self.publish_diagnostics(&uri, version, diagnostics)?;
             }
-        };
+        }
 
-        self.publish_diagnostics(uri, version, diagnostics)?;
-        self.buffers.get_mut(uri).unwrap().ast = ast;
+        buf.sem_model = buf.ast.as_ref().map(SemanticModel::from);
+
+        self.buffers.insert(uri.to_string(), buf);
         Ok(())
     }
 
@@ -361,12 +487,11 @@ impl<I: BufRead, O: Write> Server<I, O> {
             version: Some(version),
             diagnostics,
         };
-        self.send_message(&OutNotification::PublishDiagnostics { params })?;
 
-        Ok(())
+        self.send_message(&OutNotification::PublishDiagnostics { params })
     }
 
-    fn error_to_diagnostic(&self, error: ParseError, src: &SourceFile) -> Diagnostic {
+    fn error_to_diagnostic(error: ParseError, src: &SourceFile) -> Diagnostic {
         let range = error.span().map_or_else(
             || {
                 let start_pos: Position = src.end_pos().into();

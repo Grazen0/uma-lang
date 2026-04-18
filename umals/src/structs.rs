@@ -1,5 +1,7 @@
 #![allow(unused)]
 
+use std::collections::HashMap;
+
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -90,14 +92,37 @@ pub struct ClientCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct TextDocumentClientCapabilities {
     pub publish_diagnostics: Option<PublishDiagnosticsClientCapabilities>,
+    pub definition: Option<DefinitionClientCapabilities>,
+    pub references: Option<ReferenceClientCapabilities>,
     pub document_symbol: Option<DocumentSymbolClientCapabilities>,
+    pub rename: Option<RenameClientCapabilities>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefinitionClientCapabilities {}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceClientCapabilities {}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentSymbolClientCapabilities {
     pub symbol_kind: Option<DocumentSymbolClientCapabilitiesSymbolKind>,
     pub hierarchical_document_symbol_support: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameClientCapabilities {
+    pub prepare_support: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize_repr)]
+#[repr(i32)]
+enum PrepareSupportDefaultBehavior {
+    Identifier = 1,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,12 +156,6 @@ pub struct GeneralClientCapabilities {
 pub struct InitializeParams {
     pub process_id: Option<i32>,
     pub capabilities: ClientCapabilities,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocumentSymbolParams {
-    pub text_document: TextDocumentIdentifier,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -191,7 +210,7 @@ pub enum TextDocumentSyncKind {
     Incremental = 2,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Constructor, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Constructor, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
     pub line: u32,
@@ -204,6 +223,12 @@ impl From<uma_core::util::Position> for Position {
     }
 }
 
+impl From<Position> for uma_core::util::Position {
+    fn from(pos: Position) -> Self {
+        Self::new(pos.line as usize, pos.character as usize)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Constructor, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Range {
@@ -211,10 +236,23 @@ pub struct Range {
     pub end: Position,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Constructor, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Location {
+    pub uri: String,
+    pub range: Range,
+}
+
 impl From<Span> for Range {
     fn from(span: Span) -> Self {
         Self::new(span.start.into(), span.end.into())
     }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Constructor, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextEdit {
+    pub range: Range,
+    pub new_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,18 +272,35 @@ pub enum Capability<T> {
     WithOptions(T),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
     pub position_encoding: Option<PositionEncodingKind>,
     pub text_document_sync: Option<TextDocumentSyncKind>,
+    pub definition_provider: Option<Capability<DefinitionOptions>>,
+    pub references_provider: Option<Capability<DefinitionOptions>>,
     pub document_symbol_provider: Option<Capability<DocumentSymbolOptions>>,
+    pub rename_provider: Option<Capability<RenameOptions>>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefinitionOptions {}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceOptions {}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentSymbolOptions {
     label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameOptions {
+    pub prepare_provider: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -350,6 +405,13 @@ pub enum OutNotification {
     PublishDiagnostics { params: PublishDiagnosticsParams },
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextDocumentPositionParams {
+    pub text_document: TextDocumentIdentifier,
+    pub position: Position,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublishDiagnosticsParams {
@@ -362,10 +424,63 @@ pub struct PublishDiagnosticsParams {
 #[serde(rename_all = "camelCase")]
 pub struct InitializedParams {}
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefinitionParams {
+    #[serde(flatten)]
+    pub pos: TextDocumentPositionParams,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceParams {
+    #[serde(flatten)]
+    pub pos: TextDocumentPositionParams,
+    pub context: ReferenceContext,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceContext {
+    pub include_declaration: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentSymbolParams {
+    pub text_document: TextDocumentIdentifier,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareRenameParams {
+    #[serde(flatten)]
+    pub pos: TextDocumentPositionParams,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameParams {
+    #[serde(flatten)]
+    pub pos: TextDocumentPositionParams,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEdit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<HashMap<String, Vec<TextEdit>>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum RequestResult {
     Initialize { capabilities: ServerCapabilities },
     Shutdown,
     DocumentSymbol(Option<Vec<DocumentSymbol>>),
+    Definition(Option<Location>),
+    References(Option<Vec<Location>>),
+    PrepareRename(Option<Range>),
+    Rename(Option<WorkspaceEdit>),
 }

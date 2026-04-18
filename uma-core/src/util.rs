@@ -1,15 +1,21 @@
 use derive_more::Constructor;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Constructor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Constructor)]
 pub struct Position {
     pub line: usize,
     pub col: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Constructor)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Constructor)]
 pub struct Span {
     pub start: Position,
     pub end: Position,
+}
+
+impl Span {
+    pub fn contains(&self, pos: Position) -> bool {
+        pos >= self.start && pos < self.end
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Constructor)]

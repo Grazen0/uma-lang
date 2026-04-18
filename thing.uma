@@ -4,7 +4,7 @@ fn add(arr, item) {
 }
 
 fn matmul(a, b) {
-    if (len(a[0]) != len(b)) {
+   if (len(a[0]) != len(b)) {
         print("Matrix dimensions\n do not match");
         return null;
     }

@@ -117,9 +117,9 @@ pub enum Expr {
     IntLit(u32),
     BoolLit(bool),
     StrLit(String),
-    Null,
-    List(Vec<Spanned<Expr>>),
-    Dict(Vec<(Spanned<Expr>, Spanned<Expr>)>),
+    NullLit,
+    ListLit(Vec<Spanned<Expr>>),
+    DictLit(Vec<(Spanned<Expr>, Spanned<Expr>)>),
     FuncCall(Spanned<String>, Vec<Spanned<Expr>>),
     Access {
         value: Box<Spanned<Expr>>,
