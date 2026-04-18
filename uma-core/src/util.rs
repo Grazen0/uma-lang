@@ -15,6 +15,14 @@ impl<T> Spanned<T> {
     {
         Spanned::new(self.span, f(self.val))
     }
+
+    pub fn merge<T2, F, O>(self, s2: Spanned<T2>, f: F) -> Spanned<O>
+    where
+        F: FnOnce(Spanned<T>, Spanned<T2>) -> O,
+    {
+        let tot_span = self.span.combine(&s2.span);
+        Spanned::new(tot_span, f(self, s2))
+    }
 }
 
 impl<T, E> Spanned<Result<T, E>> {
@@ -24,11 +32,11 @@ impl<T, E> Spanned<Result<T, E>> {
 }
 
 pub trait Combine {
-    fn combine(self, other: Self) -> Self;
+    fn combine(&self, other: &Self) -> Self;
 }
 
-impl<T: Ord> Combine for Range<T> {
-    fn combine(self, other: Self) -> Self {
+impl<T: Ord + Copy> Combine for Range<T> {
+    fn combine(&self, other: &Self) -> Self {
         let start = Ord::min(self.start, other.start);
         let end = Ord::max(self.end, other.end);
         start..end

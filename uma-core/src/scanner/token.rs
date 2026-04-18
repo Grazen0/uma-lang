@@ -104,10 +104,8 @@ pub enum Token {
     Continue,
     #[kinded(rename = "'break'")]
     Break,
-    #[kinded(rename = "'true'")]
-    True,
-    #[kinded(rename = "'false'")]
-    False,
+    #[kinded(rename = "bool literal")]
+    BoolLit(bool),
     #[kinded(rename = "numeric literal")]
     NumLit(u32),
     #[kinded(rename = "string literal")]
@@ -133,6 +131,13 @@ impl Token {
     pub fn assume_str_lit(self) -> String {
         match self {
             Self::StrLit(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn assume_bool_lit(self) -> bool {
+        match self {
+            Self::BoolLit(b) => b,
             _ => unreachable!(),
         }
     }

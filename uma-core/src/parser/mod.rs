@@ -4,9 +4,9 @@ pub mod error;
 pub use error::*;
 
 use crate::{
-    parser::ast::{BinOp, Expr, Func, ModifyOp, Program, Rel, Stmt, UnaryOp},
+    parser::ast::{BinOp, Expr, Func, LValue, ModifyOp, Program, Rel, Stmt, UnaryOp},
     scanner::{Token, TokenKind},
-    util::{Combine, Spanned},
+    util::Spanned,
 };
 use std::{iter::Peekable, ops::Range};
 
@@ -84,9 +84,9 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
         let mut funcs = vec![];
         let mut errors = vec![];
 
-        while let Some(beg_span) = self.accept_span(TokenKind::Fn) {
-            let name_token = self.expect(TokenKind::Iden)?;
-            let name = name_token.map(Token::assume_iden);
+        while let Some(fn_tok) = self.accept_token(TokenKind::Fn) {
+            let name_tok = self.expect(TokenKind::Iden)?;
+            let name = name_tok.map(Token::assume_iden);
 
             self.expect(TokenKind::LParen)?;
 
@@ -97,11 +97,13 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
                 args.push(arg_name);
 
                 while self.accept(TokenKind::Comma) {
-                    let param_token = self.expect(TokenKind::Iden)?;
-                    let arg_name = param_token.clone().map(Token::assume_iden);
+                    let param_tok = self.expect(TokenKind::Iden)?;
+                    let arg_name = param_tok.clone().map(Token::assume_iden);
 
                     if args.iter().find(|a| a.val == arg_name.val).is_some() {
-                        errors.push(ParseError::DuplicateParameter { param_token });
+                        errors.push(ParseError::DuplicateParameter {
+                            param_token: param_tok,
+                        });
                     } else {
                         args.push(arg_name.clone());
                     }
@@ -110,13 +112,12 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
 
             self.expect(TokenKind::RParen)?;
             self.expect(TokenKind::LBrace)?;
-            let stmts = self.stmts()?;
-            let end_span = self.expect(TokenKind::RBrace)?.span;
 
-            funcs.push(Spanned::new(
-                beg_span.combine(end_span),
-                Func { name, stmts, args },
-            ));
+            let stmts = self.stmts()?;
+            let rb_tok = self.expect(TokenKind::RBrace)?;
+
+            let func = Func { name, stmts, args };
+            funcs.push(Spanned::merge(fn_tok, rb_tok, |_, _| func));
         }
 
         make_parse_result(Program { funcs }, errors)
@@ -134,37 +135,35 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
     }
 
     fn stmt(&mut self) -> ParseResult<Spanned<Stmt>> {
-        let (beg_span, end_span, stmt) = if let Some(beg_span) = self.accept_span(TokenKind::LBrace)
-        {
+        if let Some(lb_tok) = self.accept_token(TokenKind::LBrace) {
             let blk_stmts = self.stmts()?;
-            let end_span = self.expect(TokenKind::RBrace)?.span;
-            let stmt = Stmt::Block(blk_stmts);
-            (beg_span, end_span, stmt)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::If) {
+            let rb_tok = self.expect(TokenKind::RBrace)?;
+
+            Ok(Spanned::merge(lb_tok, rb_tok, |_, _| {
+                Stmt::Block(blk_stmts)
+            }))
+        } else if let Some(if_tok) = self.accept_token(TokenKind::If) {
             self.expect(TokenKind::LParen)?;
             let cond = self.expr()?;
             self.expect(TokenKind::RParen)?;
             let stmt = self.stmt()?;
 
-            let else_stmt = self
-                .accept(TokenKind::Else)
-                .then(|| self.stmt())
-                .transpose()?;
+            if self.accept(TokenKind::Else) {
+                let else_stmt = self.stmt()?;
 
-            let end_span = else_stmt
-                .as_ref()
-                .map(|stmt| &stmt.span)
-                .cloned()
-                .unwrap_or_else(|| stmt.span.clone());
-
-            let stmt = Stmt::If {
-                cond,
-                stmt: Box::new(stmt),
-                else_stmt: else_stmt.map(Box::new),
-            };
-
-            (beg_span, end_span, stmt)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::While) {
+                Ok(Spanned::merge(if_tok, else_stmt, |_, else_stmt| Stmt::If {
+                    cond,
+                    stmt: Box::new(stmt),
+                    else_stmt: Some(Box::new(else_stmt)),
+                }))
+            } else {
+                Ok(Spanned::merge(if_tok, stmt, |_, stmt| Stmt::If {
+                    cond,
+                    stmt: Box::new(stmt),
+                    else_stmt: None,
+                }))
+            }
+        } else if let Some(while_tok) = self.accept_token(TokenKind::While) {
             self.expect(TokenKind::LParen)?;
             let cond = self.expr()?;
             self.expect(TokenKind::RParen)?;
@@ -180,43 +179,38 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
                 .transpose()?;
 
             let inner_stmt = self.stmt()?;
-            let end_span = inner_stmt.span.clone();
 
-            let stmt = Stmt::While {
-                cond,
-                stmt: Box::new(inner_stmt),
-                cont_expr,
-            };
-
-            (beg_span, end_span, stmt)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::Loop) {
+            Ok(Spanned::merge(while_tok, inner_stmt, |_, stmt| {
+                Stmt::While {
+                    cond,
+                    stmt: Box::new(stmt),
+                    cont_expr,
+                }
+            }))
+        } else if let Some(loop_tok) = self.accept_token(TokenKind::Loop) {
             let inner_stmt = self.stmt()?;
-            let end_span = inner_stmt.span.clone();
-            let stmt = Stmt::Loop(Box::new(inner_stmt));
-            (beg_span, end_span, stmt)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::Return) {
+            Ok(Spanned::merge(loop_tok, inner_stmt, |_, stmt| {
+                Stmt::Loop(Box::new(stmt))
+            }))
+        } else if let Some(ret_tok) = self.accept_token(TokenKind::Return) {
             let expr = self
                 .peek_is_not(TokenKind::Semi)
                 .then(|| self.expr())
                 .transpose()?;
 
-            let end_span = self.expect(TokenKind::Semi)?.span;
-            let stmt = Stmt::Return(expr);
-            (beg_span, end_span, stmt)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::Break) {
-            let end_span = self.expect(TokenKind::Semi)?.span;
-            (beg_span, end_span, Stmt::Break)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::Continue) {
-            let end_span = self.expect(TokenKind::Semi)?.span;
-            (beg_span, end_span, Stmt::Continue)
+            let semi_tok = self.expect(TokenKind::Semi)?;
+            Ok(Spanned::merge(ret_tok, semi_tok, |_, _| Stmt::Return(expr)))
+        } else if let Some(break_tok) = self.accept_token(TokenKind::Break) {
+            let semi_tok = self.expect(TokenKind::Semi)?;
+            Ok(Spanned::merge(break_tok, semi_tok, |_, _| Stmt::Break))
+        } else if let Some(cont_tok) = self.accept_token(TokenKind::Continue) {
+            let semi_tok = self.expect(TokenKind::Semi)?;
+            Ok(Spanned::merge(cont_tok, semi_tok, |_, _| Stmt::Continue))
         } else {
             let expr = self.expr()?;
-            let beg_span = expr.span.clone();
-            let end_span = self.expect(TokenKind::Semi)?.span;
-            (beg_span, end_span, Stmt::Expr(expr))
-        };
-
-        Ok(Spanned::new(beg_span.combine(end_span), stmt))
+            let semi_tok = self.expect(TokenKind::Semi)?;
+            Ok(Spanned::merge(expr, semi_tok, |expr, _| Stmt::Expr(expr)))
+        }
     }
 
     fn expr(&mut self) -> ParseResult<Spanned<Expr>> {
@@ -226,35 +220,35 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
     fn assign_expr(&mut self) -> ParseResult<Spanned<Expr>> {
         let expr = self.ter_expr()?;
 
-        let (beg_span, modify_op) = if let Some(beg_span) = self.accept_span(TokenKind::AddAssign) {
-            (beg_span, ModifyOp::Add)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::SubAssign) {
-            (beg_span, ModifyOp::Sub)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::MulAssign) {
-            (beg_span, ModifyOp::Mul)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::DivAssign) {
-            (beg_span, ModifyOp::Div)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::ModAssign) {
-            (beg_span, ModifyOp::Mod)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::Assign) {
-            let lval = expr.try_into().map_err(|e| vec![e])?;
+        if self.accept(TokenKind::Assign) {
+            let lval: Spanned<LValue> = expr.try_into().map_err(|e| vec![e])?;
             let src_expr = self.assign_expr()?;
-            let end_span = src_expr.span.clone();
 
-            return Ok(Spanned::new(
-                beg_span.combine(end_span),
-                Expr::Assign(lval, Box::new(src_expr)),
-            ));
+            return Ok(Spanned::merge(lval, src_expr, |lval, src_expr| {
+                Expr::Assign(lval, Box::new(src_expr))
+            }));
+        }
+
+        let modify_op = if let Some(tok) = self.accept_token(TokenKind::AddAssign) {
+            tok.map(|_| ModifyOp::Add)
+        } else if let Some(tok) = self.accept_token(TokenKind::SubAssign) {
+            tok.map(|_| ModifyOp::Sub)
+        } else if let Some(tok) = self.accept_token(TokenKind::MulAssign) {
+            tok.map(|_| ModifyOp::Mul)
+        } else if let Some(tok) = self.accept_token(TokenKind::DivAssign) {
+            tok.map(|_| ModifyOp::Div)
+        } else if let Some(tok) = self.accept_token(TokenKind::ModAssign) {
+            tok.map(|_| ModifyOp::Mod)
         } else {
             return Ok(expr);
         };
 
         let lval = expr.try_into().map_err(|e| vec![e])?;
         let src_expr = self.assign_expr()?;
-        let end_span = src_expr.span.clone();
-        let out_expr = Expr::Modify(modify_op, lval, Box::new(src_expr));
 
-        Ok(Spanned::new(beg_span.combine(end_span), out_expr))
+        Ok(Spanned::merge(lval, src_expr, |lval, src_expr| {
+            Expr::Modify(modify_op, lval, Box::new(src_expr))
+        }))
     }
 
     fn ter_expr(&mut self) -> ParseResult<Spanned<Expr>> {
@@ -265,15 +259,11 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
             self.expect(TokenKind::Colon)?;
             let if_no = self.ter_expr()?;
 
-            let beg_span = expr.span.clone();
-            let end_span = if_no.span.clone();
-            let ter_expr = Expr::Ternary {
+            Ok(Spanned::merge(expr, if_no, |expr, if_no| Expr::Ternary {
                 cond: Box::new(expr),
                 if_yes: Box::new(if_yes),
                 if_no: Box::new(if_no),
-            };
-
-            Ok(Spanned::new(beg_span.combine(end_span), ter_expr))
+            }))
         } else {
             Ok(expr)
         }
@@ -282,15 +272,13 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
     fn or_expr(&mut self) -> ParseResult<Spanned<Expr>> {
         let mut expr = self.and_expr()?;
 
-        while self.accept(TokenKind::BoolOr) {
+        while let Some(or_tok) = self.accept_token(TokenKind::BoolOr) {
+            let op = or_tok.map(|_| BinOp::BoolOr);
             let right = self.and_expr()?;
 
-            let beg_span = expr.span.clone();
-            let end_span = right.span.clone();
-            expr = Spanned::new(
-                beg_span.combine(end_span),
-                Expr::BinOp(BinOp::BoolOr, Box::new(expr), Box::new(right)),
-            );
+            expr = Spanned::merge(expr, right, |l, r| {
+                Expr::BinOp(op, Box::new(l), Box::new(r))
+            });
         }
 
         Ok(expr)
@@ -299,15 +287,13 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
     fn and_expr(&mut self) -> ParseResult<Spanned<Expr>> {
         let mut expr = self.eq_expr()?;
 
-        while self.accept(TokenKind::BoolAnd) {
+        while let Some(and_tok) = self.accept_token(TokenKind::BoolAnd) {
+            let op = and_tok.map(|_| BinOp::BoolAnd);
             let right = self.eq_expr()?;
 
-            let beg_span = expr.span.clone();
-            let end_span = right.span.clone();
-            expr = Spanned::new(
-                beg_span.combine(end_span),
-                Expr::BinOp(BinOp::BoolAnd, Box::new(expr), Box::new(right)),
-            );
+            expr = Spanned::merge(expr, right, |l, r| {
+                Expr::BinOp(op, Box::new(l), Box::new(r))
+            });
         }
 
         Ok(expr)
@@ -317,22 +303,17 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
         let mut expr = self.ineq_expr()?;
 
         loop {
-            let rel = if self.accept(TokenKind::Eq) {
-                Rel::Eq
-            } else if self.accept(TokenKind::Neq) {
-                Rel::Neq
+            let rel = if let Some(tok) = self.accept_token(TokenKind::Eq) {
+                tok.map(|_| Rel::Eq)
+            } else if let Some(tok) = self.accept_token(TokenKind::Neq) {
+                tok.map(|_| Rel::Neq)
             } else {
                 break;
             };
 
             let right = self.ineq_expr()?;
 
-            let beg_span = expr.span.clone();
-            let end_span = right.span.clone();
-            expr = Spanned::new(
-                beg_span.combine(end_span),
-                Expr::Rel(rel, Box::new(expr), Box::new(right)),
-            );
+            expr = Spanned::merge(expr, right, |l, r| Expr::Rel(rel, Box::new(l), Box::new(r)));
         }
 
         Ok(expr)
@@ -342,26 +323,21 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
         let mut expr = self.add_expr()?;
 
         loop {
-            let rel = if self.accept(TokenKind::Lt) {
-                Rel::Lt
-            } else if self.accept(TokenKind::Leq) {
-                Rel::Leq
-            } else if self.accept(TokenKind::Gt) {
-                Rel::Gt
-            } else if self.accept(TokenKind::Geq) {
-                Rel::Geq
+            let rel = if let Some(tok) = self.accept_token(TokenKind::Lt) {
+                tok.map(|_| Rel::Lt)
+            } else if let Some(tok) = self.accept_token(TokenKind::Leq) {
+                tok.map(|_| Rel::Leq)
+            } else if let Some(tok) = self.accept_token(TokenKind::Gt) {
+                tok.map(|_| Rel::Gt)
+            } else if let Some(tok) = self.accept_token(TokenKind::Geq) {
+                tok.map(|_| Rel::Geq)
             } else {
                 break;
             };
 
             let right = self.add_expr()?;
 
-            let beg_span = expr.span.clone();
-            let end_span = right.span.clone();
-            expr = Spanned::new(
-                beg_span.combine(end_span),
-                Expr::Rel(rel, Box::new(expr), Box::new(right)),
-            );
+            expr = Spanned::merge(expr, right, |l, r| Expr::Rel(rel, Box::new(l), Box::new(r)));
         }
 
         Ok(expr)
@@ -371,22 +347,19 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
         let mut expr = self.mul_expr()?;
 
         loop {
-            let op = if self.accept(TokenKind::Add) {
-                BinOp::Add
-            } else if self.accept(TokenKind::Sub) {
-                BinOp::Sub
+            let op = if let Some(tok) = self.accept_token(TokenKind::Add) {
+                tok.map(|_| BinOp::Add)
+            } else if let Some(tok) = self.accept_token(TokenKind::Sub) {
+                tok.map(|_| BinOp::Sub)
             } else {
                 break;
             };
 
             let right = self.mul_expr()?;
 
-            let beg_span = expr.span.clone();
-            let end_span = right.span.clone();
-            expr = Spanned::new(
-                beg_span.combine(end_span),
-                Expr::BinOp(op, Box::new(expr), Box::new(right)),
-            );
+            expr = Spanned::merge(expr, right, |l, r| {
+                Expr::BinOp(op, Box::new(l), Box::new(r))
+            });
         }
 
         Ok(expr)
@@ -396,45 +369,42 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
         let mut expr = self.unary_expr()?;
 
         loop {
-            let op = if self.accept(TokenKind::Mul) {
-                BinOp::Mul
-            } else if self.accept(TokenKind::Div) {
-                BinOp::Div
-            } else if self.accept(TokenKind::Mod) {
-                BinOp::Mod
+            let op = if let Some(tok) = self.accept_token(TokenKind::Mul) {
+                tok.map(|_| BinOp::Mul)
+            } else if let Some(tok) = self.accept_token(TokenKind::Div) {
+                tok.map(|_| BinOp::Div)
+            } else if let Some(tok) = self.accept_token(TokenKind::Mod) {
+                tok.map(|_| BinOp::Mod)
             } else {
                 break;
             };
 
             let right = self.unary_expr()?;
 
-            let beg_span = expr.span.clone();
-            let end_span = right.span.clone();
-            expr = Spanned::new(
-                beg_span.combine(end_span),
-                Expr::BinOp(op, Box::new(expr), Box::new(right)),
-            );
+            expr = Spanned::merge(expr, right, |l, r| {
+                Expr::BinOp(op, Box::new(l), Box::new(r))
+            });
         }
 
         Ok(expr)
     }
 
     fn unary_expr(&mut self) -> ParseResult<Spanned<Expr>> {
-        let (beg_span, unary_op) = if let Some(beg_span) = self.accept_span(TokenKind::Add) {
-            (beg_span, UnaryOp::Plus)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::Sub) {
-            (beg_span, UnaryOp::Minus)
-        } else if let Some(beg_span) = self.accept_span(TokenKind::BoolNot) {
-            (beg_span, UnaryOp::BoolNot)
+        let op_tok = if let Some(tok) = self.accept_token(TokenKind::Add) {
+            tok.map(|_| UnaryOp::Plus)
+        } else if let Some(tok) = self.accept_token(TokenKind::Sub) {
+            tok.map(|_| UnaryOp::Minus)
+        } else if let Some(tok) = self.accept_token(TokenKind::BoolNot) {
+            tok.map(|_| UnaryOp::BoolNot)
         } else {
             return self.access_expr();
         };
 
         let inner_expr = self.access_expr()?;
-        let end_span = inner_expr.span.clone();
-        let expr = Expr::UnaryOp(unary_op, Box::new(inner_expr));
 
-        Ok(Spanned::new(beg_span.combine(end_span), expr))
+        Ok(Spanned::merge(op_tok, inner_expr, |op, expr| {
+            Expr::UnaryOp(op, Box::new(expr))
+        }))
     }
 
     fn access_expr(&mut self) -> ParseResult<Spanned<Expr>> {
@@ -442,16 +412,12 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
 
         while self.accept(TokenKind::LBracket) {
             let idx_expr = self.expr()?;
-            let beg_span = expr.span.clone();
-            let end_span = self.expect(TokenKind::RBracket)?.span;
+            let rbracket = self.expect(TokenKind::RBracket)?;
 
-            expr = Spanned::new(
-                beg_span.combine(end_span),
-                Expr::Access {
-                    value: Box::new(expr),
-                    idx: Box::new(idx_expr),
-                },
-            );
+            expr = Spanned::merge(expr, rbracket, |expr, _| Expr::Access {
+                value: Box::new(expr),
+                idx: Box::new(idx_expr),
+            });
         }
 
         Ok(expr)
@@ -472,14 +438,12 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
             self.expect(TokenKind::RParen)?;
             Ok(expr)
         } else if let Some(tok) = self.accept_token(TokenKind::NumLit) {
-            Ok(tok.map(Token::assume_num_lit).map(Expr::Int))
-        } else if let Some(tok) = self.accept_token(TokenKind::True) {
-            Ok(tok.map(|_| Expr::Bool(true)))
-        } else if let Some(tok) = self.accept_token(TokenKind::False) {
-            Ok(tok.map(|_| Expr::Bool(false)))
+            Ok(tok.map(Token::assume_num_lit).map(Expr::IntLit))
+        } else if let Some(tok) = self.accept_token(TokenKind::BoolLit) {
+            Ok(tok.map(Token::assume_bool_lit).map(Expr::BoolLit))
         } else if let Some(tok) = self.accept_token(TokenKind::Null) {
             Ok(tok.map(|_| Expr::Null))
-        } else if let Some(beg_span) = self.accept_span(TokenKind::LBrace) {
+        } else if let Some(lb_tok) = self.accept_token(TokenKind::LBrace) {
             let mut items = vec![];
 
             if self.peek_is_not(TokenKind::RBrace) {
@@ -492,10 +456,9 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
                 }
             }
 
-            let end_span = self.expect(TokenKind::RBrace)?.span;
-
-            Ok(Spanned::new(beg_span.combine(end_span), Expr::Dict(items)))
-        } else if let Some(beg_span) = self.accept_span(TokenKind::LBracket) {
+            let rb_tok = self.expect(TokenKind::RBrace)?;
+            Ok(Spanned::merge(lb_tok, rb_tok, |_, _| Expr::Dict(items)))
+        } else if let Some(lb_tok) = self.accept_token(TokenKind::LBracket) {
             let mut items = vec![];
 
             if self.peek_is_not(TokenKind::RBracket) {
@@ -508,8 +471,8 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
                 }
             }
 
-            let end_span = self.expect(TokenKind::RBracket)?.span;
-            Ok(Spanned::new(beg_span.combine(end_span), Expr::List(items)))
+            let rb_tok = self.expect(TokenKind::RBracket)?;
+            Ok(Spanned::merge(lb_tok, rb_tok, |_, _| Expr::List(items)))
         } else if let Some(tok) = self.accept_token(TokenKind::Iden) {
             let name = tok.map(Token::assume_iden);
 
@@ -526,18 +489,16 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
                     }
                 }
 
-                let beg_span = name.span.clone();
-                let end_span = self.expect(TokenKind::RParen)?.span;
+                let rp_tok = self.expect(TokenKind::RParen)?;
 
-                Ok(Spanned::new(
-                    beg_span.combine(end_span),
-                    Expr::FuncCall(name, args),
-                ))
+                Ok(Spanned::merge(name, rp_tok, |name, _| {
+                    Expr::FuncCall(name, args)
+                }))
             } else {
                 Ok(Spanned::new(name.span.clone(), Expr::Iden(name)))
             }
         } else if let Some(tok) = self.accept_token(TokenKind::StrLit) {
-            Ok(tok.map(Token::assume_str_lit).map(Expr::Str))
+            Ok(tok.map(Token::assume_str_lit).map(Expr::StrLit))
         } else {
             Err(vec![ParseError::ExpectedExpression { found: tok }])
         }

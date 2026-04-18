@@ -34,8 +34,8 @@ pub enum ExecuteError {
     #[display("list index out of bounds (tried to access position {_0})")]
     IndexOutOfBounds(#[error(ignore)] i64),
 
-    #[display("expected symbol, found {found}")]
-    ExpectedSymbol { found: ValueKind },
+    #[display("cannot use {found} as dictionary key")]
+    InvalidDictKey { found: ValueKind },
 
     #[display("key '{_0}' not found")]
     DictKeyNotFound(#[error(ignore)] DictKey),
@@ -66,7 +66,7 @@ impl TryFrom<Value> for DictKey {
             Value::Bool(b) => Ok(Self::Bool(b)),
             Value::Str(s) => Ok(Self::Str(s.borrow().clone())),
             Value::Null => Ok(Self::Null),
-            _ => Err(ExecuteError::ExpectedSymbol {
+            _ => Err(ExecuteError::InvalidDictKey {
                 found: value.kind(),
             }),
         }

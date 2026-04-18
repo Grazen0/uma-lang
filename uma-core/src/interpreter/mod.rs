@@ -330,7 +330,7 @@ impl<'a> Interpreter<'a> {
             Expr::Modify(op, lval, expr) => {
                 let val = self.eval_expr(expr, scope)?;
                 let val_clone = val.clone();
-                let op = *op;
+                let op = op.val;
 
                 self.with_lval(
                     lval,
@@ -362,13 +362,13 @@ impl<'a> Interpreter<'a> {
 
                 Ok(val)
             }
-            Expr::Int(n) => Ok(Value::Int(*n as i64)),
-            Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::IntLit(n) => Ok(Value::Int(*n as i64)),
+            Expr::BoolLit(b) => Ok(Value::Bool(*b)),
             Expr::Null => Ok(Value::Null),
             Expr::Iden(name) => scope
                 .get_cloned(&name.val)
                 .ok_or_else(|| ExecuteError::UndeclaredVariable(name.clone())),
-            Expr::Str(s) => Ok(Value::str(s.clone())),
+            Expr::StrLit(s) => Ok(Value::str(s.clone())),
             Expr::List(item_exprs) => {
                 let items = item_exprs
                     .iter()
@@ -391,7 +391,7 @@ impl<'a> Interpreter<'a> {
 
                 Ok(Value::dict(items))
             }
-            Expr::BinOp(op, lhs, rhs) => match op {
+            Expr::BinOp(op, lhs, rhs) => match op.val {
                 BinOp::Add => {
                     let lhs_val = self.eval_expr(lhs, scope)?;
                     let rhs_val = self.eval_expr(rhs, scope)?;
@@ -442,7 +442,7 @@ impl<'a> Interpreter<'a> {
             Expr::UnaryOp(op, expr) => {
                 let val = self.eval_expr(expr, scope)?;
 
-                match op {
+                match op.val {
                     UnaryOp::Plus => Ok(Value::Int(*val.as_int()?)),
                     UnaryOp::Minus => Ok(Value::Int(-*val.as_int()?)),
                     UnaryOp::BoolNot => Ok(Value::Bool(!*val.as_bool()?)),
@@ -452,7 +452,7 @@ impl<'a> Interpreter<'a> {
                 let lhs_val = self.eval_expr(lhs, scope)?;
                 let rhs_val = self.eval_expr(rhs, scope)?;
 
-                let result = match rel {
+                let result = match rel.val {
                     Rel::Eq => lhs_val == rhs_val,
                     Rel::Neq => lhs_val != rhs_val,
                     Rel::Gt => lhs_val.as_int()? > rhs_val.as_int()?,
