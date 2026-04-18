@@ -8,7 +8,7 @@ use crate::{
     scanner::{Token, TokenKind},
     util::Spanned,
 };
-use std::{iter::Peekable, ops::Range};
+use std::iter::Peekable;
 
 fn make_parse_result<T>(val: T, errors: Vec<ParseError>) -> ParseResult<T> {
     if errors.is_empty() {
@@ -34,10 +34,6 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
             .peek()
             .is_some_and(|tok| tok.val.kind() == kind)
             .then(|| self.tokens.next().unwrap())
-    }
-
-    fn accept_span(&mut self, kind: TokenKind) -> Option<Range<usize>> {
-        self.accept_token(kind).map(|tok| tok.span)
     }
 
     fn accept(&mut self, kind: TokenKind) -> bool {
