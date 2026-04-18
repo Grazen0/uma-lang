@@ -8,9 +8,15 @@ pub struct Program {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuncParam {
+    pub name: Spanned<String>,
+    pub mutable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Func {
     pub name: Spanned<String>,
-    pub args: Vec<Spanned<String>>,
+    pub params: Vec<Spanned<FuncParam>>,
     pub stmts: Vec<Spanned<Stmt>>,
 }
 
@@ -25,15 +31,13 @@ impl TryFrom<Spanned<Expr>> for Spanned<LValue> {
 
     fn try_from(expr: Spanned<Expr>) -> Result<Self, Self::Error> {
         expr.clone()
-            .map(|e| -> Result<LValue, Self::Error> {
-                match e {
-                    Expr::Iden(name) => Ok(LValue::Iden(name)),
-                    Expr::Access { value, idx } => {
-                        let value_lval = Self::try_from(*value)?;
-                        Ok(LValue::Access(Box::new(value_lval), idx))
-                    }
-                    _ => Err(ParseError::ExprNotAssignable(expr)),
+            .map(|e| match e {
+                Expr::Iden(name) => Ok(LValue::Iden(name)),
+                Expr::Access { value, idx } => {
+                    let value_lval = Self::try_from(*value)?;
+                    Ok(LValue::Access(Box::new(value_lval), idx))
                 }
+                _ => Err(ParseError::ExprNotAssignable(Box::new(expr))),
             })
             .transpose()
     }
@@ -41,6 +45,11 @@ impl TryFrom<Spanned<Expr>> for Spanned<LValue> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
+    VarDecl {
+        name: Spanned<String>,
+        init_expr: Box<Spanned<Expr>>,
+        mutable: bool,
+    },
     Expr(Spanned<Expr>),
     Block(Vec<Spanned<Stmt>>),
     If {
@@ -81,7 +90,9 @@ pub enum BinOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
-pub enum ModifyOp {
+pub enum AssignOp {
+    #[display("=")]
+    Assign,
     #[display("+=")]
     Add,
     #[display("-=")]
@@ -103,8 +114,7 @@ pub enum UnaryOp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Assign(Spanned<LValue>, Box<Spanned<Expr>>),
-    Modify(Spanned<ModifyOp>, Spanned<LValue>, Box<Spanned<Expr>>),
+    Assign(Spanned<AssignOp>, Spanned<LValue>, Box<Spanned<Expr>>),
     Rel(Spanned<Rel>, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
     Ternary {
         cond: Box<Spanned<Expr>>,

@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use derive_more::{Display, Error};
 use kinded::Kinded;
 
-use crate::{parser::ast::ModifyOp, util::Spanned};
+use crate::parser::ast::AssignOp;
 
 #[derive(Debug, Clone, Display, Error)]
 pub enum ExecuteError {
@@ -22,14 +22,14 @@ pub enum ExecuteError {
     #[display("'continue' not used within a loop")]
     UnexpectedContinue,
 
-    #[display("undeclared variable `{}`.", _0.val)]
-    UndeclaredVariable(#[error(ignore)] Spanned<String>),
+    #[display("undeclared variable `{_0}`.")]
+    UndeclaredVariable(#[error(ignore)] String),
 
     #[display("function expected {expected} argument(s), got {got}.")]
     MismatchedFuncArgs { expected: usize, got: usize },
 
     #[display("cannot use '{op}' on variable of type '{dst_kind}'.")]
-    InvalidAssignOp { dst_kind: ValueKind, op: ModifyOp },
+    InvalidAssignment { dst_kind: ValueKind, op: AssignOp },
 
     #[display("list index out of bounds (tried to access position {_0})")]
     IndexOutOfBounds(#[error(ignore)] i64),
@@ -43,8 +43,14 @@ pub enum ExecuteError {
     #[display("function did not return a value")]
     FuncDidNotReturnValue,
 
-    #[display("function redeclared")]
-    FuncRedeclaration,
+    #[display("function redeclared: `{_0}`")]
+    FuncRedeclared(#[error(ignore)] String),
+
+    #[display("variable redeclared: `{_0}`")]
+    VarRedeclared(#[error(ignore)] String),
+
+    #[display("cannot mutate immutable variable `{_0}`")]
+    CannotMutateVar(#[error(ignore)] String),
 }
 
 pub type ExecuteResult<T> = Result<T, ExecuteError>;

@@ -69,37 +69,7 @@
           "named": true
         },
         {
-          "type": "assignment",
-          "named": true
-        },
-        {
           "type": "ter_expr",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "assignment",
-    "named": true,
-    "fields": {
-      "left": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "ter_expr",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "assign_expr",
           "named": true
         }
       ]
@@ -270,6 +240,21 @@
     }
   },
   {
+    "type": "param_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "iden",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "source_file",
     "named": true,
     "root": true,
@@ -295,6 +280,10 @@
       "types": [
         {
           "type": "expr",
+          "named": true
+        },
+        {
+          "type": "iden",
           "named": true
         },
         {
@@ -538,16 +527,20 @@
     "named": true
   },
   {
+    "type": "let",
+    "named": false
+  },
+  {
     "type": "loop",
+    "named": false
+  },
+  {
+    "type": "mut",
     "named": false
   },
   {
     "type": "null",
     "named": false
-  },
-  {
-    "type": "param_decl",
-    "named": true
   },
   {
     "type": "return",

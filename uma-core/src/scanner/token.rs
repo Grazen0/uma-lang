@@ -116,6 +116,10 @@ pub enum Token {
     Error(TokenError),
     #[kinded(rename = "'fn'")]
     Fn,
+    #[kinded(rename = "'let'")]
+    Let,
+    #[kinded(rename = "'mut'")]
+    Mut,
     #[kinded(rename = "'null'")]
     Null,
 }

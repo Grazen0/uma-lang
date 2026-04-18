@@ -17,13 +17,13 @@ use uma_core::{
 use crate::{
     jsonrpc::{self, Request, Response},
     structs::{
-        Capability, DefinitionParams, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol,
-        DocumentSymbolParams, InitializeParams, InitializedParams, Location, LogMessageParams,
-        MessageType, OutNotification, Position, PositionEncodingKind, PrepareRenameParams,
-        PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams,
-        RequestError, RequestHandlerResult, RequestResult, ServerCapabilities, ShowMessageParams,
-        SymbolKind, TextDocumentSyncKind, TextEdit, WorkspaceEdit,
+        Capability, DefinitionParams, Diagnostic, DiagnosticSeverity, DiagnosticTag,
+        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DocumentSymbol, DocumentSymbolParams, InitializeParams, InitializedParams, Location,
+        LogMessageParams, MessageType, OutNotification, Position, PositionEncodingKind,
+        PrepareRenameParams, PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions,
+        RenameParams, RequestError, RequestHandlerResult, RequestResult, ServerCapabilities,
+        ShowMessageParams, SymbolKind, TextDocumentSyncKind, TextEdit, WorkspaceEdit,
     },
 };
 
@@ -93,6 +93,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
                 return Err(FatalError::UnsupportedJsonRpcVersion(req.jsonrpc).into());
             }
 
+            self.log(MessageType::Debug, format!("Received request: {:?}", req))?;
             self.handle_request(req)?;
         }
 
@@ -297,9 +298,13 @@ impl<I: BufRead, O: Write> Server<I, O> {
             return Ok(Ok(RequestResult::DocumentSymbol(None)));
         };
 
+        let Some(def_span) = symbol.span.as_ref() else {
+            return Ok(Ok(RequestResult::Definition(None)));
+        };
+
         let loc = Location {
             uri: params.pos.text_document.uri,
-            range: symbol.name.span.clone().into(),
+            range: def_span.clone().into(),
         };
 
         Ok(Ok(RequestResult::Definition(Some(loc))))
@@ -327,9 +332,10 @@ impl<I: BufRead, O: Write> Server<I, O> {
             .map(|span| Location::new(uri.clone(), span.clone().into()))
             .collect();
 
-        if params.context.include_declaration {
-            let def_span = symbol.name.span.clone();
-            locs.push(Location::new(uri.clone(), def_span.into()));
+        if let Some(def_span) = symbol.span.as_ref()
+            && params.context.include_declaration
+        {
+            locs.push(Location::new(uri.clone(), def_span.clone().into()));
         }
 
         Ok(Ok(RequestResult::References(Some(locs))))
@@ -377,9 +383,9 @@ impl<I: BufRead, O: Write> Server<I, O> {
             return Ok(Ok(RequestResult::PrepareRename(None)));
         };
 
-        Ok(Ok(RequestResult::PrepareRename(Some(
-            symbol.name.span.clone().into(),
-        ))))
+        Ok(Ok(RequestResult::PrepareRename(
+            symbol.span.as_ref().map(|span| span.clone().into()),
+        )))
     }
 
     fn handle_rename(&mut self, params: RenameParams) -> anyhow::Result<RequestHandlerResult> {
@@ -396,8 +402,12 @@ impl<I: BufRead, O: Write> Server<I, O> {
             return Ok(Ok(RequestResult::Rename(None)));
         };
 
+        let Some(def_span) = symbol.span.as_ref() else {
+            return Ok(Ok(RequestResult::Rename(None)));
+        };
+
         let mut locs: Vec<_> = symbol.refs.clone();
-        locs.push(symbol.name.span.clone());
+        locs.push(def_span.clone());
 
         let change_list = locs
             .into_iter()
@@ -451,28 +461,55 @@ impl<I: BufRead, O: Write> Server<I, O> {
         self.buffers.remove(&uri);
 
         let mut buf = Buffer::new(src);
-
         let mut scanner = Scanner::new(&buf.src);
         let mut parser = UmaParser::new(&mut scanner);
 
-        match parser.program_to_end() {
-            Ok(ast) => {
-                buf.ast = Some(ast);
-                self.publish_diagnostics(&uri, version, vec![])?;
-            }
-            Err(errors) => {
-                let diagnostics = errors
-                    .into_iter()
-                    .map(|err| Self::error_to_diagnostic(err, &buf.src))
-                    .collect();
+        let mut diagnostics = vec![];
 
-                self.publish_diagnostics(&uri, version, diagnostics)?;
+        match parser.program_to_end() {
+            Ok(ast) => buf.ast = Some(ast),
+            Err(errors) => {
+                let err_iter = errors
+                    .into_iter()
+                    .map(|err| Self::error_to_diagnostic(err, &buf.src));
+
+                diagnostics.extend(err_iter);
             }
-        }
+        };
 
         buf.sem_model = buf.ast.as_ref().map(SemanticModel::from);
 
+        if let Some(model) = &buf.sem_model {
+            let unused_diags_iter = model
+                .symbols()
+                .iter()
+                .filter(|sym| !sym.is_used())
+                .filter_map(|sym| {
+                    sym.span.as_ref().map(|span| Diagnostic {
+                        range: span.clone().into(),
+                        code: None,
+                        message: format!("unused {}: `{}`", sym.kind, sym.name),
+                        severity: Some(DiagnosticSeverity::Hint),
+                        tags: Some(vec![DiagnosticTag::Unnecessary]),
+                        source: None,
+                    })
+                });
+
+            let sem_errors_iter = model.errors().iter().map(|err| Diagnostic {
+                range: err.span().clone().into(),
+                code: None,
+                message: err.to_string(),
+                severity: Some(DiagnosticSeverity::Error),
+                tags: None,
+                source: None,
+            });
+
+            diagnostics.extend(unused_diags_iter);
+            diagnostics.extend(sem_errors_iter);
+        }
+
         self.buffers.insert(uri.to_string(), buf);
+        self.publish_diagnostics(&uri, version, diagnostics)?;
         Ok(())
     }
 
@@ -506,6 +543,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
             code: None,
             message: format!("{}", error.with_src(src)),
             severity: Some(DiagnosticSeverity::Error),
+            tags: None,
             source: None,
         }
     }

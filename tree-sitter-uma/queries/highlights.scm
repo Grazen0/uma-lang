@@ -1,5 +1,7 @@
 [
   "fn"
+  "let"
+  "mut"
   "return"
   "break"
   "continue"

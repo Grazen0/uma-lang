@@ -162,11 +162,13 @@ pub struct InitializeParams {
 #[serde(rename_all = "camelCase")]
 pub struct DocumentSymbol {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
     pub kind: SymbolKind,
     pub range: Range,
     pub selection_range: Range,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<DocumentSymbol>>,
 }
@@ -364,10 +366,26 @@ pub enum DiagnosticSeverity {
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostic {
     pub range: Range,
-    pub severity: Option<DiagnosticSeverity>,
-    pub code: Option<String>,
-    pub source: Option<String>,
     pub message: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<DiagnosticSeverity>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<DiagnosticTag>>,
+}
+
+#[derive(Debug, Clone, Serialize_repr)]
+#[repr(i32)]
+pub enum DiagnosticTag {
+    Unnecessary = 1,
+    Deprecated = 2,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -416,7 +434,10 @@ pub struct TextDocumentPositionParams {
 #[serde(rename_all = "camelCase")]
 pub struct PublishDiagnosticsParams {
     pub uri: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<i32>,
+
     pub diagnostics: Vec<Diagnostic>,
 }
 

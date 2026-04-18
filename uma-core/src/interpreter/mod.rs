@@ -13,7 +13,7 @@ use crate::{
         core::{DictKey, ExecuteError, ExecuteResult, Value},
         scope::{Scope, ValueModifier},
     },
-    parser::ast::{BinOp, Expr, Func, LValue, ModifyOp, Program, Rel, Stmt, UnaryOp},
+    parser::ast::{AssignOp, BinOp, Expr, Func, LValue, Program, Rel, Stmt, UnaryOp},
     util::Spanned,
 };
 
@@ -54,7 +54,7 @@ impl<'a> FunctionScope<'a> {
 
     fn insert(&mut self, name: String, value: Function<'a>) -> ExecuteResult<()> {
         if self.funcs.contains_key(&name) {
-            return Err(ExecuteError::FuncRedeclaration);
+            return Err(ExecuteError::FuncRedeclared(name));
         }
 
         self.funcs.insert(name, value);
@@ -106,12 +106,12 @@ impl<'a> Interpreter<'a> {
 
         match func {
             Function::UserDef(func) => {
-                core::expect_arg_count(func.val.args.len(), args.len())?;
+                core::expect_arg_count(func.val.params.len(), args.len())?;
 
                 let scope = Scope::over(self.global_scope.clone());
 
-                for (arg_name, arg) in func.val.args.iter().zip(args) {
-                    scope.insert(arg_name.val.clone(), arg);
+                for (param, arg) in func.val.params.iter().zip(args) {
+                    scope.decl_var(param.val.name.val.clone(), arg, param.val.mutable)?;
                 }
 
                 let scope = Rc::new(scope);
@@ -148,6 +148,15 @@ impl<'a> Interpreter<'a> {
         scope: &Rc<Scope>,
     ) -> ExecuteResult<Option<ControlFlow>> {
         let result = match &stmt.val {
+            Stmt::VarDecl {
+                name,
+                init_expr,
+                mutable,
+            } => {
+                let val = self.eval_expr(init_expr, scope)?;
+                scope.decl_var(name.val.clone(), val, *mutable)?;
+                None
+            }
             Stmt::Expr(expr) => {
                 self.eval_expr(expr, scope)?;
                 None
@@ -221,51 +230,6 @@ impl<'a> Interpreter<'a> {
         Ok(result)
     }
 
-    fn assign_lval(
-        &mut self,
-        lval: &Spanned<LValue>,
-        scope: &Rc<Scope>,
-        val: Value,
-    ) -> ExecuteResult<()> {
-        match &lval.val {
-            LValue::Iden(name) => {
-                scope.insert(name.val.clone(), val);
-                Ok(())
-            }
-            LValue::Access(sub_lval, idx_expr) => {
-                let idx_val = self.eval_expr(idx_expr, scope)?;
-
-                self.with_lval(
-                    sub_lval,
-                    scope,
-                    Box::new(move |dst| match dst {
-                        Value::List(items) => {
-                            let idx_int = *idx_val.as_int()?;
-
-                            let mut items_ref = items.borrow_mut();
-                            let dst_item = idx_int
-                                .try_into()
-                                .ok()
-                                .and_then(|i: usize| items_ref.get_mut(i))
-                                .ok_or(ExecuteError::IndexOutOfBounds(idx_int))?;
-
-                            *dst_item = val;
-                            Ok(())
-                        }
-                        Value::Dict(items) => {
-                            let idx_sym = DictKey::try_from(idx_val.clone())?;
-
-                            let mut items_ref = items.borrow_mut();
-                            items_ref.insert(idx_sym, val);
-                            Ok(())
-                        }
-                        _ => todo!(),
-                    }),
-                )
-            }
-        }
-    }
-
     fn with_lval(
         &mut self,
         lval: &Spanned<LValue>,
@@ -273,13 +237,7 @@ impl<'a> Interpreter<'a> {
         f: Box<ValueModifier>,
     ) -> ExecuteResult<()> {
         match &lval.val {
-            LValue::Iden(name) => {
-                if !scope.with_var(&name.val, f)? {
-                    Err(ExecuteError::UndeclaredVariable(name.clone()))
-                } else {
-                    Ok(())
-                }
-            }
+            LValue::Iden(name) => scope.mutate_var(&name.val, f),
             LValue::Access(sub_lval, idx_expr) => {
                 let idx_val = self.eval_expr(idx_expr, scope)?;
 
@@ -318,12 +276,7 @@ impl<'a> Interpreter<'a> {
 
     fn eval_expr(&mut self, expr: &Spanned<Expr>, scope: &Rc<Scope>) -> ExecuteResult<Value> {
         match &expr.val {
-            Expr::Assign(lval, expr) => {
-                let val = self.eval_expr(expr, scope)?;
-                self.assign_lval(lval, scope, val.clone())?;
-                Ok(val)
-            }
-            Expr::Modify(op, lval, expr) => {
+            Expr::Assign(op, lval, expr) => {
                 let val = self.eval_expr(expr, scope)?;
                 let val_clone = val.clone();
                 let op = op.val;
@@ -333,21 +286,22 @@ impl<'a> Interpreter<'a> {
                     scope,
                     Box::new(move |dst| {
                         match (dst, op) {
-                            (Value::Int(n), ModifyOp::Add) => *n += val_clone.as_int()?,
-                            (Value::Int(n), ModifyOp::Sub) => *n -= val_clone.as_int()?,
-                            (Value::Int(n), ModifyOp::Mul) => *n *= val_clone.as_int()?,
-                            (Value::Int(n), ModifyOp::Div) => *n /= val_clone.as_int()?,
-                            (Value::Int(n), ModifyOp::Mod) => *n %= val_clone.as_int()?,
-                            (Value::List(items), ModifyOp::Add) => {
+                            (dst_val, AssignOp::Assign) => *dst_val = val_clone,
+                            (Value::Int(n), AssignOp::Add) => *n += val_clone.as_int()?,
+                            (Value::Int(n), AssignOp::Sub) => *n -= val_clone.as_int()?,
+                            (Value::Int(n), AssignOp::Mul) => *n *= val_clone.as_int()?,
+                            (Value::Int(n), AssignOp::Div) => *n /= val_clone.as_int()?,
+                            (Value::Int(n), AssignOp::Mod) => *n %= val_clone.as_int()?,
+                            (Value::List(items), AssignOp::Add) => {
                                 let val_list = val_clone.as_list()?;
                                 items.borrow_mut().append(&mut val_list.borrow().clone());
                             }
-                            (Value::Str(s), ModifyOp::Add) => {
+                            (Value::Str(s), AssignOp::Add) => {
                                 let val_str = val_clone.to_string();
                                 s.borrow_mut().push_str(&val_str);
                             }
                             (dst_val, op) => {
-                                return Err(ExecuteError::InvalidAssignOp {
+                                return Err(ExecuteError::InvalidAssignment {
                                     dst_kind: dst_val.kind(),
                                     op,
                                 });
@@ -363,8 +317,8 @@ impl<'a> Interpreter<'a> {
             Expr::BoolLit(b) => Ok(Value::Bool(*b)),
             Expr::NullLit => Ok(Value::Null),
             Expr::Iden(name) => scope
-                .get_cloned(&name.val)
-                .ok_or_else(|| ExecuteError::UndeclaredVariable(name.clone())),
+                .get_value(&name.val)
+                .ok_or_else(|| ExecuteError::UndeclaredVariable(name.val.clone())),
             Expr::StrLit(s) => Ok(Value::str(s.clone())),
             Expr::ListLit(item_exprs) => {
                 let items = item_exprs

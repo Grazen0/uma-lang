@@ -232,6 +232,8 @@ impl<'a> Iterator for Scanner<'a> {
                     "true" => Token::BoolLit(true),
                     "false" => Token::BoolLit(false),
                     "fn" => Token::Fn,
+                    "let" => Token::Let,
+                    "mut" => Token::Mut,
                     "null" => Token::Null,
                     _ => Token::Iden(iden),
                 }

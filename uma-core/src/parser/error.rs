@@ -34,11 +34,8 @@ pub enum ParseError {
     #[display("expected expression")]
     ExpectedExpression { found: Option<Spanned<Token>> },
 
-    #[display("duplicate parameter")]
-    DuplicateParameter { param_token: Spanned<Token> },
-
     #[display("expression is not assignable")]
-    ExprNotAssignable(#[error(ignore)] Spanned<Expr>),
+    ExprNotAssignable(#[error(ignore)] Box<Spanned<Expr>>),
 }
 
 impl DisplayWithSrc for ParseError {
@@ -59,13 +56,7 @@ impl DisplayWithSrc for ParseError {
                 found.fmt_with_src(f, src)?;
                 Ok(())
             }
-            Self::DuplicateParameter { param_token } => {
-                write!(f, "duplicate parameter ")?;
-                param_token.fmt_with_src(f, src)?;
-                Ok(())
-            }
-            _ => todo!(),
-            // Self::ExprNotAssignable(..) => "cannot assign to expression".to_string(),
+            Self::ExprNotAssignable(..) => write!(f, "cannot assign to expression"),
         }
     }
 }
@@ -75,7 +66,6 @@ impl ParseError {
         match self {
             Self::UnexpectedToken { found, .. } => found.as_ref().map(|t| t.span.clone()),
             Self::ExpectedExpression { found } => found.as_ref().map(|t| t.span.clone()),
-            Self::DuplicateParameter { param_token } => Some(param_token.span.clone()),
             Self::ExprNotAssignable(..) => None,
         }
     }

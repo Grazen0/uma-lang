@@ -1,6 +1,7 @@
 program ::= {func}*
 
-func ::= "fn" IDEN "(" {IDEN {"," IDEN}*} ")" "{" {stmt}* "}"
+func       ::= "fn" IDEN "(" {param_decl {"," param_decl}* {","}} ")" "{" {stmt}* "}"
+param_decl ::= {"mut"} IDEN
 
 stmt ::= "if" "(" expr ")" stmt {"else" stmt}
 stmt ::= "while" "gramm(" expr ")" {":" "(" expr ")"} stmt
@@ -9,6 +10,7 @@ stmt ::= "return" {expr} ";"
 stmt ::= "break" ";"
 stmt ::= "continue" ";"
 stmt ::= "{" {stmt}* "}"
+stmt ::= "let" {"mut"} IDEN "=" expr ";"
 stmt ::= expr ";"
 
 expr        ::= assign_expr
@@ -26,8 +28,8 @@ access_expr ::= access_expr {"[" expr "]"}*
 dict_entry ::= expr ":" expr
 
 base_expr ::= "(" expr ")"
-base_expr ::= IDEN {"(" {expr {"," expr}*} ")"}
-base_expr ::= "{" {dict_entry {"," dict_entry}*}  "}"
+base_expr ::= IDEN {"(" {expr {"," expr}* {","}} ")"}
+base_expr ::= "{" {dict_entry {"," dict_entry}* {","}}  "}"
 base_expr ::= "null"
 base_expr ::= NUM_LIT
 base_expr ::= STR_LIT

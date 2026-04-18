@@ -17,17 +17,14 @@ module.exports = grammar({
         alias($.iden, $.func_name),
         "(",
         optional(
-          seq(
-            alias($.iden, $.param_decl),
-            repeat(seq(",", alias($.iden, $.param_decl))),
-            optional(","),
-          ),
+          seq($.param_decl, repeat(seq(",", $.param_decl)), optional(",")),
         ),
         ")",
         "{",
         repeat($.stmt),
         "}",
       ),
+    param_decl: ($) => seq(optional("mut"), $.iden),
     stmt: ($) =>
       choice(
         prec.left(
@@ -46,6 +43,7 @@ module.exports = grammar({
         seq("return", optional($.expr), ";"),
         seq("break", ";"),
         seq("continue", ";"),
+        seq("let", optional("mut"), $.iden, "=", $.expr, ";"),
         seq($.expr, ";"),
         $.stmt_blk,
       ),
@@ -53,12 +51,14 @@ module.exports = grammar({
     stmt_blk: ($) => prec(1, seq("{", repeat($.stmt), "}")),
 
     expr: ($) => $.assign_expr,
-    assignment: ($) => seq(field("left", $.ter_expr), "=", $.assign_expr),
     assign_expr: ($) =>
       choice(
         $.ter_expr,
-        $.assignment,
-        seq($.ter_expr, choice("+=", "-=", "*=", "/=", "%="), $.assign_expr),
+        seq(
+          $.ter_expr,
+          choice("=", "+=", "-=", "*=", "/=", "%="),
+          $.assign_expr,
+        ),
       ),
     ter_expr: ($) =>
       seq($.or_expr, optional(seq("?", $.expr, ":", $.ter_expr))),
