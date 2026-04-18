@@ -9,18 +9,19 @@ use serde_json::Value;
 use uma_core::{
     core::SourceFile,
     fmt::DisplayWithSrcExt,
-    parser::{ParseError, UmaParser},
+    parser::{ParseError, UmaParser, ast::Program},
     scanner::Scanner,
 };
 
 use crate::{
     jsonrpc::{self, Request, Response},
     structs::{
-        Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-        DidOpenTextDocumentParams, InitializeParams, InitializedParams, LogMessageParams,
-        MessageType, OutNotification, Position, PositionEncodingKind, PublishDiagnosticsParams,
-        Range, RequestError, RequestHandlerResult, RequestResult, ServerCapabilities,
-        ShowMessageParams, TextDocumentSyncKind,
+        Capability, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol,
+        DocumentSymbolParams, InitializeParams, InitializedParams, LogMessageParams, MessageType,
+        OutNotification, Position, PositionEncodingKind, PublishDiagnosticsParams, Range,
+        RequestError, RequestHandlerResult, RequestResult, ServerCapabilities, ShowMessageParams,
+        SymbolKind, TextDocumentSyncKind,
     },
 };
 
@@ -47,11 +48,27 @@ pub enum FatalError {
     MalformedHeader,
 }
 
+#[derive(Debug, Clone)]
+struct Buffer {
+    src: SourceFile,
+    ast: Option<Program>,
+}
+
+impl Buffer {
+    pub fn new(src: String) -> Self {
+        Self {
+            src: SourceFile::from_contents(src),
+            ast: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Server<I: BufRead, O: Write> {
     exit: bool,
     input: I,
     output: O,
-    buffers: HashMap<String, String>,
+    buffers: HashMap<String, Buffer>,
 }
 
 impl<I: BufRead, O: Write> Server<I, O> {
@@ -133,6 +150,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
             req.method.as_str(),
             "initialize" => handle_initialize,
             "shutdown" => handle_shutdown,
+            "textDocument/documentSymbol" => handle_document_symbol,
             _ => Err(RequestError::MethodNotFound)
 
         };
@@ -217,10 +235,18 @@ impl<I: BufRead, O: Write> Server<I, O> {
             return Ok(Err(RequestError::InitializeError { retry: false }));
         };
 
+        let support_symbols = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|doc| doc.document_symbol.as_ref())
+            .and_then(|sym| sym.symbol_kind.as_ref())
+            .is_some_and(|sym_kind| sym_kind.value_set.is_some());
         Ok(Ok(RequestResult::Initialize {
             capabilities: ServerCapabilities {
                 position_encoding: Some(chosen_encoding),
                 text_document_sync: Some(TextDocumentSyncKind::Full),
+                document_symbol_provider: support_symbols.then_some(Capability::Supported(true)),
             },
         }))
     }
@@ -228,7 +254,36 @@ impl<I: BufRead, O: Write> Server<I, O> {
     fn handle_shutdown(&mut self, _params: ()) -> anyhow::Result<RequestHandlerResult> {
         // TODO: set shutdown flag to reject further requests
         self.show(MessageType::Info, "Shutting down server...".to_string())?;
+        self.buffers.clear();
         Ok(Ok(RequestResult::Shutdown))
+    }
+
+    fn handle_document_symbol(
+        &mut self,
+        params: DocumentSymbolParams,
+    ) -> anyhow::Result<RequestHandlerResult> {
+        let Some(buf) = self.buffers.get(&params.text_document.uri) else {
+            return Ok(Err(RequestError::InvalidParams));
+        };
+
+        let Some(ast) = &buf.ast else {
+            return Ok(Ok(RequestResult::DocumentSymbol(None)));
+        };
+
+        let symbols = ast
+            .funcs
+            .iter()
+            .map(|func| DocumentSymbol {
+                name: func.val.name.val.clone(),
+                detail: None,
+                kind: SymbolKind::Function,
+                range: Range::from_span(&func.span, &buf.src),
+                selection_range: Range::from_span(&func.val.name.span, &buf.src),
+                children: None,
+            })
+            .collect();
+
+        Ok(Ok(RequestResult::DocumentSymbol(Some(symbols))))
     }
 
     // Notification handlers ==================================================
@@ -240,8 +295,8 @@ impl<I: BufRead, O: Write> Server<I, O> {
 
     fn handle_did_open(&mut self, params: DidOpenTextDocumentParams) -> anyhow::Result<()> {
         let doc = params.text_document;
-        self.buffers.insert(doc.uri.clone(), doc.text);
-        self.udpate_diagnostics(&doc.uri, doc.version)?;
+        self.update_buffer_src(doc.uri.clone(), doc.text);
+        self.update_buffer(&doc.uri, doc.version)?;
         Ok(())
     }
 
@@ -250,10 +305,10 @@ impl<I: BufRead, O: Write> Server<I, O> {
 
         for change in params.content_changes {
             assert!(change.range.is_none()); // not supported yet
-            self.buffers.insert(doc.uri.clone(), change.text);
+            self.update_buffer_src(doc.uri.clone(), change.text);
         }
 
-        self.udpate_diagnostics(&doc.uri, doc.version)?;
+        self.update_buffer(&doc.uri, doc.version)?;
         Ok(())
     }
 
@@ -268,24 +323,39 @@ impl<I: BufRead, O: Write> Server<I, O> {
     }
 
     // Other ==================================================================
+    fn update_buffer_src(&mut self, uri: String, src: String) {
+        self.buffers.insert(uri, Buffer::new(src));
+    }
 
-    fn udpate_diagnostics(&mut self, uri: &str, version: i32) -> anyhow::Result<()> {
-        let Some(buf) = self.buffers.get(uri) else {
-            return Ok(());
-        };
+    fn update_buffer(&mut self, uri: &str, version: i32) -> anyhow::Result<()> {
+        let buf = self.buffers.get(uri).unwrap();
 
-        let text = SourceFile::from_contents(buf.clone());
-        let mut scanner = Scanner::new(text.contents());
+        let mut scanner = Scanner::new(buf.src.contents());
         let mut parser = UmaParser::new(&mut scanner);
 
-        let diagnostics = match parser.program_to_end() {
-            Ok(_) => vec![],
-            Err(errors) => errors
-                .into_iter()
-                .map(|err| self.error_to_diagnostic(err, &text))
-                .collect(),
+        let (ast, diagnostics) = match parser.program_to_end() {
+            Ok(ast) => (Some(ast), vec![]),
+            Err(errors) => {
+                let diags = errors
+                    .into_iter()
+                    .map(|err| self.error_to_diagnostic(err, &buf.src))
+                    .collect();
+
+                (None, diags)
+            }
         };
 
+        self.publish_diagnostics(uri, version, diagnostics)?;
+        self.buffers.get_mut(uri).unwrap().ast = ast;
+        Ok(())
+    }
+
+    fn publish_diagnostics(
+        &mut self,
+        uri: &str,
+        version: i32,
+        diagnostics: Vec<Diagnostic>,
+    ) -> anyhow::Result<()> {
         let params = PublishDiagnosticsParams {
             uri: uri.to_string(),
             version: Some(version),
@@ -305,7 +375,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
             },
             |r| {
                 let start_pos = text.byte_to_line(r.start);
-                let end_pos = text.byte_to_line(r.end - 1);
+                let end_pos = text.byte_to_line(r.end);
                 Range::new(start_pos.into(), end_pos.into())
             },
         );

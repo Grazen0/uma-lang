@@ -7,9 +7,9 @@ fn matmul(a, b) {
     if (len(a[0]) != len(b)) {
         print("Matrix dimensions\n do not match");
         return null;
-    } 
+    }
 
-    m = en(a);     # this is a comment
+    m = len(a);     # this is a comment
     n = len(a[0]);  # this is a comment
     p = len(b[0]);
 
