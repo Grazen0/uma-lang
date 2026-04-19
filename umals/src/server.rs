@@ -9,35 +9,63 @@ use serde_json::Value;
 use uma_core::{
     core::SourceFile,
     fmt::DisplayWithSrcExt,
-    parser::{ParseError, UmaParser, ast::Program},
+    parser::{
+        ParseError, UmaParser,
+        ast::{Program, Stmt},
+    },
     scanner::Scanner,
     semantic::{self, SemanticModel},
+    util::Spanned,
 };
 
 use crate::{
     jsonrpc::{self, Request, Response},
     structs::{
-        Capability, CompletionOptions, CompletionParams, DefinitionParams, Diagnostic,
-        DiagnosticSeverity, DiagnosticTag, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-        DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, InitializeParams,
+        Capability, CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams,
+        CompletionResult, DefinitionParams, DefinitionResult, Diagnostic, DiagnosticSeverity,
+        DiagnosticTag, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+        DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResult,
+        FoldingRange, FoldingRangeParams, FoldingRangeResult, InitializeParams, InitializeResult,
         InitializedParams, Location, LogMessageParams, MessageType, OutNotification, Position,
-        PositionEncodingKind, PrepareRenameParams, PublishDiagnosticsParams, Range,
-        ReferenceParams, RenameOptions, RenameParams, RequestError, RequestHandlerResult,
-        RequestResult, ServerCapabilities, ShowMessageParams, SymbolKind, TextDocumentSyncKind,
-        TextEdit, WorkspaceEdit,
+        PositionEncodingKind, PrepareRenameParams, PrepareRenameResult, PublishDiagnosticsParams,
+        Range, ReferenceParams, ReferencesResult, RenameOptions, RenameParams, RenameResult,
+        RequestError, RequestResult, ServerCapabilities, ShowMessageParams, ShutdownResult,
+        SymbolKind, TextDocumentSyncKind, TextEdit, WorkspaceEdit,
     },
 };
 
-macro_rules! match_handlers {
+macro_rules! request_handlers {
     ($self:expr, $raw_params:expr, $method_var:expr, $($method:literal => $handler:ident),*, $fb_iden:ident => $fallback:expr) => {
         match $method_var {
             $(
-                $method => $self.$handler(serde_json::from_value($raw_params.unwrap_or(Value::Null))?)?,
+                $method => {
+                    let params = serde_json::from_value($raw_params.unwrap_or(Value::Null))?;
+                    match $self.$handler(params)? {
+                        Ok(val) => Ok(serde_json::to_value(val)?),
+                        Err(e) => Err(e),
+                    }
+                }
             )*
             $fb_iden => $fallback,
         }
     };
 }
+
+macro_rules! notification_handlers {
+    ($self:expr, $raw_params:expr, $method_var:expr, $($method:literal => $handler:ident),*, $fb_iden:ident => $fallback:expr) => {
+        match $method_var {
+            $(
+                $method => {
+                    let params = serde_json::from_value($raw_params.unwrap_or(Value::Null))?;
+                    $self.$handler(params)?;
+                }
+            )*
+            $fb_iden => $fallback,
+        }
+    };
+}
+
+type HandlerResult<T> = anyhow::Result<RequestResult<T>>;
 
 #[derive(Debug, Clone, Display, Error)]
 pub enum FatalError {
@@ -150,7 +178,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
             return self.handle_notification(&req.method, req.params);
         };
 
-        let result = match_handlers! {
+        let result = request_handlers! {
             self,
             req.params,
             req.method.as_str(),
@@ -162,6 +190,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
             "textDocument/prepareRename" => handle_prepare_rename,
             "textDocument/rename" => handle_rename,
             "textDocument/completion" => handle_completion,
+            "textDocument/foldingRange" => handle_folding_range,
             _method => Err(RequestError::MethodNotFound)
 
         };
@@ -179,7 +208,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
         method: &str,
         raw_params: Option<Value>,
     ) -> anyhow::Result<()> {
-        match_handlers! {
+        notification_handlers! {
             self,
             raw_params,
             method,
@@ -192,6 +221,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
                 self.log(MessageType::Warning, format!("unknown notification: `{method}`"))?;
             }
         }
+
         Ok(())
     }
 
@@ -221,10 +251,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
 
     // Request handlers =======================================================
 
-    fn handle_initialize(
-        &mut self,
-        params: InitializeParams,
-    ) -> anyhow::Result<RequestHandlerResult> {
+    fn handle_initialize(&mut self, params: InitializeParams) -> HandlerResult<InitializeResult> {
         // TODO: support other encodings, mainly utf-16
         let encoding_priority = [
             PositionEncodingKind::Utf8,
@@ -258,10 +285,10 @@ impl<I: BufRead, O: Write> Server<I, O> {
         let supports_prepare_rename = doc_capabilities
             .and_then(|doc| doc.rename.as_ref())
             .is_some_and(|rename| rename.prepare_support.is_some_and(|b| b));
-        // let supports_completion = doc_capabilities.is_some_and(|doc| doc.completion.is_some());
-        let supports_completion = false;
+        let supports_completion = doc_capabilities.is_some_and(|doc| doc.completion.is_some());
+        let supports_folding = doc_capabilities.is_some_and(|doc| doc.folding_range.is_some());
 
-        Ok(Ok(RequestResult::Initialize {
+        Ok(Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 position_encoding: Some(chosen_encoding),
                 text_document_sync: Some(TextDocumentSyncKind::Full),
@@ -278,21 +305,19 @@ impl<I: BufRead, O: Write> Server<I, O> {
                     }
                 }),
                 completion_provider: supports_completion.then_some(CompletionOptions {}),
+                folding_range_provider: Some(Capability::Supported(supports_folding)),
             },
         }))
     }
 
-    fn handle_shutdown(&mut self, _params: ()) -> anyhow::Result<RequestHandlerResult> {
+    fn handle_shutdown(&mut self, _params: ()) -> HandlerResult<ShutdownResult> {
         // TODO: set shutdown flag to reject further requests
         self.show(MessageType::Info, "Shutting down server...".to_string())?;
         self.buffers.clear();
-        Ok(Ok(RequestResult::Shutdown))
+        Ok(Ok(ShutdownResult))
     }
 
-    fn handle_definition(
-        &mut self,
-        params: DefinitionParams,
-    ) -> anyhow::Result<RequestHandlerResult> {
+    fn handle_definition(&mut self, params: DefinitionParams) -> HandlerResult<DefinitionResult> {
         let Some(buf) = self.buffers.get(&params.pos.text_document.uri) else {
             return Ok(Err(RequestError::InvalidParams));
         };
@@ -300,11 +325,11 @@ impl<I: BufRead, O: Write> Server<I, O> {
         let model = buf.sem_model.as_ref();
 
         let Some(symbol) = model.and_then(|m| m.symbol_lookup(params.pos.position.into())) else {
-            return Ok(Ok(RequestResult::DocumentSymbol(None)));
+            return Ok(Ok(DefinitionResult(None)));
         };
 
         let Some(def_span) = symbol.span.as_ref() else {
-            return Ok(Ok(RequestResult::Definition(None)));
+            return Ok(Ok(DefinitionResult(None)));
         };
 
         let loc = Location {
@@ -312,13 +337,10 @@ impl<I: BufRead, O: Write> Server<I, O> {
             range: def_span.clone().into(),
         };
 
-        Ok(Ok(RequestResult::Definition(Some(loc))))
+        Ok(Ok(DefinitionResult(Some(loc))))
     }
 
-    fn handle_references(
-        &mut self,
-        params: ReferenceParams,
-    ) -> anyhow::Result<RequestHandlerResult> {
+    fn handle_references(&mut self, params: ReferenceParams) -> HandlerResult<ReferencesResult> {
         let Some(buf) = self.buffers.get(&params.pos.text_document.uri) else {
             return Ok(Err(RequestError::InvalidParams));
         };
@@ -326,7 +348,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
         let model = buf.sem_model.as_ref();
 
         let Some(symbol) = model.and_then(|m| m.symbol_lookup(params.pos.position.into())) else {
-            return Ok(Ok(RequestResult::References(None)));
+            return Ok(Ok(ReferencesResult(None)));
         };
 
         let uri = &params.pos.text_document.uri;
@@ -343,19 +365,19 @@ impl<I: BufRead, O: Write> Server<I, O> {
             locs.push(Location::new(uri.clone(), def_span.clone().into()));
         }
 
-        Ok(Ok(RequestResult::References(Some(locs))))
+        Ok(Ok(ReferencesResult(Some(locs))))
     }
 
     fn handle_document_symbol(
         &mut self,
         params: DocumentSymbolParams,
-    ) -> anyhow::Result<RequestHandlerResult> {
+    ) -> HandlerResult<DocumentSymbolResult> {
         let Some(buf) = self.buffers.get(&params.text_document.uri) else {
             return Ok(Err(RequestError::InvalidParams));
         };
 
         let Some(ast) = &buf.ast else {
-            return Ok(Ok(RequestResult::DocumentSymbol(None)));
+            return Ok(Ok(DocumentSymbolResult(None)));
         };
 
         let symbols = ast
@@ -371,13 +393,13 @@ impl<I: BufRead, O: Write> Server<I, O> {
             })
             .collect();
 
-        Ok(Ok(RequestResult::DocumentSymbol(Some(symbols))))
+        Ok(Ok(DocumentSymbolResult(Some(symbols))))
     }
 
     fn handle_prepare_rename(
         &mut self,
         params: PrepareRenameParams,
-    ) -> anyhow::Result<RequestHandlerResult> {
+    ) -> HandlerResult<PrepareRenameResult> {
         let Some(buf) = self.buffers.get(&params.pos.text_document.uri) else {
             return Ok(Err(RequestError::InvalidParams));
         };
@@ -385,15 +407,15 @@ impl<I: BufRead, O: Write> Server<I, O> {
         let model = buf.sem_model.as_ref();
 
         let Some(symbol) = model.and_then(|m| m.symbol_lookup(params.pos.position.into())) else {
-            return Ok(Ok(RequestResult::PrepareRename(None)));
+            return Ok(Ok(PrepareRenameResult(None)));
         };
 
-        Ok(Ok(RequestResult::PrepareRename(
+        Ok(Ok(PrepareRenameResult(
             symbol.span.as_ref().map(|span| span.clone().into()),
         )))
     }
 
-    fn handle_rename(&mut self, params: RenameParams) -> anyhow::Result<RequestHandlerResult> {
+    fn handle_rename(&mut self, params: RenameParams) -> HandlerResult<RenameResult> {
         let uri = &params.pos.text_document.uri;
         let Some(buf) = self.buffers.get(uri) else {
             return Ok(Err(RequestError::InvalidParams));
@@ -404,11 +426,11 @@ impl<I: BufRead, O: Write> Server<I, O> {
             .as_ref()
             .and_then(|m| m.symbol_lookup(params.pos.position.into()))
         else {
-            return Ok(Ok(RequestResult::Rename(None)));
+            return Ok(Ok(RenameResult(None)));
         };
 
         let Some(def_span) = symbol.span.as_ref() else {
-            return Ok(Ok(RequestResult::Rename(None)));
+            return Ok(Ok(RenameResult(None)));
         };
 
         let mut locs: Vec<_> = symbol.refs.clone();
@@ -421,16 +443,39 @@ impl<I: BufRead, O: Write> Server<I, O> {
 
         let changes = HashMap::from([(uri.clone(), change_list)]);
 
-        Ok(Ok(RequestResult::Rename(Some(WorkspaceEdit {
+        Ok(Ok(RenameResult(Some(WorkspaceEdit {
             changes: Some(changes),
         }))))
     }
 
-    fn handle_completion(
+    fn handle_completion(&mut self, params: CompletionParams) -> HandlerResult<CompletionResult> {
+        // TODO: implement
+        Ok(Ok(CompletionResult(None)))
+    }
+
+    fn handle_folding_range(
         &mut self,
-        _params: CompletionParams,
-    ) -> anyhow::Result<RequestHandlerResult> {
-        todo!()
+        params: FoldingRangeParams,
+    ) -> HandlerResult<FoldingRangeResult> {
+        let Some(buf) = self.buffers.get(&params.text_document.uri) else {
+            return Ok(Err(RequestError::InvalidParams));
+        };
+
+        let Some(ast) = buf.ast.as_ref() else {
+            return Ok(Ok(FoldingRangeResult(None)));
+        };
+
+        let mut folds = vec![];
+
+        for func in &ast.funcs {
+            folds.push(func.span.clone().into());
+
+            for stmt in &func.val.stmts {
+                Self::get_folds(stmt, &mut folds);
+            }
+        }
+
+        Ok(Ok(FoldingRangeResult(Some(folds))))
     }
 
     // Notification handlers ==================================================
@@ -523,14 +568,21 @@ impl<I: BufRead, O: Write> Server<I, O> {
                     }
                 });
 
-            let sem_errors_iter = model.errors().iter().map(|err| Diagnostic {
+            let extra_errors = model.errors().iter().map(|err| Diagnostic {
                 range: err.span().clone().into(),
                 message: err.to_string(),
                 severity: Some(DiagnosticSeverity::Error),
                 ..Default::default()
             });
 
-            let extra_hint_diagnostics = model.hints().iter().map(|hint| Diagnostic {
+            let extra_warnings = model.warnings().iter().map(|hint| Diagnostic {
+                range: hint.span().clone().into(),
+                message: hint.to_string(),
+                severity: Some(DiagnosticSeverity::Warning),
+                ..Default::default()
+            });
+
+            let extra_hints = model.hints().iter().map(|hint| Diagnostic {
                 range: hint.span().clone().into(),
                 message: hint.to_string(),
                 severity: Some(DiagnosticSeverity::Hint),
@@ -542,8 +594,9 @@ impl<I: BufRead, O: Write> Server<I, O> {
 
             diagnostics.extend(unused_diags_iter);
             diagnostics.extend(not_mutated_diags_iter);
-            diagnostics.extend(sem_errors_iter);
-            diagnostics.extend(extra_hint_diagnostics);
+            diagnostics.extend(extra_errors);
+            diagnostics.extend(extra_warnings);
+            diagnostics.extend(extra_hints);
         }
 
         self.buffers.insert(uri.to_string(), buf);
@@ -566,6 +619,30 @@ impl<I: BufRead, O: Write> Server<I, O> {
         self.send_message(&OutNotification::PublishDiagnostics { params })
     }
 
+    fn get_folds(stmt: &Spanned<Stmt>, out_folds: &mut Vec<FoldingRange>) {
+        match &stmt.val {
+            Stmt::Block(inner_stmts) => {
+                out_folds.push(stmt.span.clone().into());
+
+                for stmt in inner_stmts {
+                    Self::get_folds(stmt, out_folds);
+                }
+            }
+            Stmt::If {
+                stmt, else_stmt, ..
+            } => {
+                Self::get_folds(stmt, out_folds);
+                else_stmt
+                    .as_ref()
+                    .inspect(|stmt| Self::get_folds(stmt, out_folds));
+            }
+            Stmt::While { stmt, .. } | Stmt::Loop(stmt) => {
+                Self::get_folds(stmt, out_folds);
+            }
+            _ => {}
+        }
+    }
+
     fn error_to_diagnostic(error: ParseError, src: &SourceFile) -> Diagnostic {
         let range = error.span().map_or_else(
             || {
@@ -579,7 +656,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
         Diagnostic {
             range,
             code: None,
-            message: format!("{}", error.with_src(src)),
+            message: error.with_src(src).to_string(),
             severity: Some(DiagnosticSeverity::Error),
             tags: None,
             source: None,

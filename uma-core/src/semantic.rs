@@ -22,25 +22,25 @@ impl<'a> Scope<'a> {
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<usize> {
+    pub fn find(&self, name: &str) -> Option<usize> {
         self.vars
             .get(name)
             .copied()
-            .or_else(|| self.parent.as_ref().and_then(|par| par.get(name)))
-    }
-
-    pub fn get_local(&self, name: &str) -> Option<usize> {
-        self.vars.get(name).copied()
+            .or_else(|| self.parent.as_ref().and_then(|par| par.find(name)))
     }
 
     #[must_use]
-    pub fn insert(&mut self, name: String, sym_idx: usize) -> bool {
+    pub fn insert_local(&mut self, name: String, sym_idx: usize) -> bool {
         if self.vars.contains_key(&name) {
             return false;
         }
 
         self.vars.insert(name, sym_idx);
         true
+    }
+
+    pub fn insert_local_shadowing(&mut self, name: String, sym_idx: usize) -> bool {
+        self.vars.insert(name, sym_idx).is_none()
     }
 }
 
@@ -56,26 +56,21 @@ pub enum SymbolValue {
     ImmutableVariable(Option<Value>),
 
     #[display("variable")]
-    MutableVariable {
-        mut_span: Span,
-        value: Option<Value>,
-        mutated: bool,
-    },
+    MutableVariable { mut_span: Span, mutated: bool },
 
     #[display("function")]
     Function(ParamCount),
 }
 
 impl SymbolValue {
-    pub fn variable(mutable: Option<Span>, init_value: Option<Value>) -> Self {
+    pub fn variable(mutable: Option<Span>, init_value: EvalValue) -> Self {
         if let Some(mut_span) = mutable {
             Self::MutableVariable {
                 mut_span,
                 mutated: false,
-                value: init_value,
             }
         } else {
-            Self::ImmutableVariable(init_value)
+            Self::ImmutableVariable(init_value.map_const_or(None, Some))
         }
     }
 }
@@ -87,6 +82,36 @@ pub enum Value {
     Bool(bool),
     Null,
     Str(String),
+    #[kinded("!")]
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvalValue {
+    Const(Value),
+    Unknown,
+}
+
+impl EvalValue {
+    pub fn map_const_or<F, O>(self, default: O, f: F) -> O
+    where
+        F: FnOnce(Value) -> O,
+    {
+        match self {
+            Self::Const(val) => f(val),
+            Self::Unknown => default,
+        }
+    }
+
+    pub fn const_zip_map<F>(self, other: EvalValue, f: F) -> EvalValue
+    where
+        F: FnOnce(Value, Value) -> Value,
+    {
+        match (self, other) {
+            (Self::Const(lhs), Self::Const(rhs)) => EvalValue::Const(f(lhs, rhs)),
+            _ => EvalValue::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,9 +170,6 @@ pub enum SemanticError {
     #[display("function redeclared: `{}`", _0.val)]
     FuncRedeclared(Spanned<String>),
 
-    #[display("variable redeclared: `{}`", _0.val)]
-    VarRedeclared(Spanned<String>),
-
     #[display("function is not assignable: `{}`", _0.val)]
     FuncNotAssignable(Spanned<String>),
 
@@ -164,7 +186,7 @@ pub enum SemanticError {
         got: usize,
     },
 
-    #[display("expected type '{expected}', got '{got}'")]
+    #[display("expected '{expected}', got '{got}'")]
     UnexpectedType {
         expected: ValueKind,
         got: ValueKind,
@@ -201,7 +223,6 @@ impl SemanticError {
             | Self::UndefinedFunc(name)
             | Self::VarNotCallable(name)
             | Self::FuncRedeclared(name)
-            | Self::VarRedeclared(name)
             | Self::FuncNotAssignable(name)
             | Self::CannotMutateVar(name)
             | Self::FuncUsedAsValue(name)
@@ -211,6 +232,20 @@ impl SemanticError {
             | Self::BinOpTypeMismatch { span, .. }
             | Self::RelTypeMismatch { span, .. }
             | Self::InvalidControlFlow(span) => span,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Display)]
+pub enum SemanticWarning {
+    #[display("this condition is always {}", _0.val)]
+    ConstantCondition(Spanned<bool>),
+}
+
+impl SemanticWarning {
+    pub fn span(&self) -> &Span {
+        match self {
+            Self::ConstantCondition(cond) => &cond.span,
         }
     }
 }
@@ -240,6 +275,7 @@ pub struct SemanticModel {
     symbols: Vec<Symbol>,
     refs: HashMap<Span, usize>,
     errors: Vec<SemanticError>,
+    warnings: Vec<SemanticWarning>,
     hints: Vec<SemanticHint>,
 }
 
@@ -264,6 +300,10 @@ impl SemanticModel {
 
     pub fn errors(&self) -> &[SemanticError] {
         &self.errors
+    }
+
+    pub fn warnings(&self) -> &[SemanticWarning] {
+        &self.warnings
     }
 
     pub fn hints(&self) -> &[SemanticHint] {
@@ -291,7 +331,7 @@ impl SemanticModel {
 
     fn add_anonymous_symbol(&mut self, name: String, kind: SymbolValue, scope: &mut Scope<'_>) {
         let sym_idx = self.add_symbol(Symbol::new(name.clone(), None, kind));
-        assert!(scope.insert(name, sym_idx));
+        assert!(scope.insert_local(name, sym_idx));
     }
 
     fn visit_program(&mut self, program: &Program) {
@@ -317,7 +357,7 @@ impl SemanticModel {
             );
             let sym_idx = self.add_symbol(new_sym);
 
-            if !file_scope.insert(func.val.name.val.clone(), sym_idx) {
+            if !file_scope.insert_local(func.val.name.val.clone(), sym_idx) {
                 self.errors
                     .push(SemanticError::FuncRedeclared(func.val.name.clone()));
             }
@@ -338,10 +378,10 @@ impl SemanticModel {
         for param in &func.val.params {
             let sym_idx = self.add_symbol(Symbol::from_spanned(
                 param.val.name.clone(),
-                SymbolValue::variable(param.val.mutable.clone(), None),
+                SymbolValue::variable(param.val.mutable.clone(), EvalValue::Unknown),
             ));
 
-            if !new_scope.insert(param.val.name.val.clone(), sym_idx) {
+            if !new_scope.insert_local(param.val.name.val.clone(), sym_idx) {
                 self.errors
                     .push(SemanticError::DuplicateParam(param.val.name.clone()));
             }
@@ -385,17 +425,8 @@ impl SemanticModel {
             } => {
                 let init_val = self.visit_expr(init_expr, scope);
                 let new_sym = SymbolValue::variable(mutable.clone(), init_val);
-
-                if let Some(sym_idx) = scope.get_local(&name.val) {
-                    self.errors.push(SemanticError::VarRedeclared(name.clone()));
-
-                    // This should count as a non-definition reference to the variable
-                    self.add_symbol_ref(sym_idx, &name.span);
-                } else {
-                    let sym_idx = self.add_symbol(Symbol::from_spanned(name.clone(), new_sym));
-                    assert!(scope.insert(name.val.clone(), sym_idx));
-                }
-
+                let sym_idx = self.add_symbol(Symbol::from_spanned(name.clone(), new_sym));
+                scope.insert_local_shadowing(name.val.clone(), sym_idx);
                 None
             }
             Stmt::Expr(expr) | Stmt::Return(Some(expr)) => {
@@ -410,59 +441,70 @@ impl SemanticModel {
                 cond,
                 stmt,
                 else_stmt,
-            } => {
-                let cond_val = self.visit_expr(cond, scope);
+            } => match self.visit_expect_bool(cond, scope) {
+                Some(cond_bool) => {
+                    self.warnings
+                        .push(SemanticWarning::ConstantCondition(Spanned::new(
+                            cond.span.clone(),
+                            cond_bool,
+                        )));
 
-                if let Some(Value::Bool(cond_b)) = cond_val {
-                    if cond_b {
-                        if let Some(else_stmt) = else_stmt.as_ref() {
-                            self.hints
-                                .push(SemanticHint::DeadCode(else_stmt.span.clone()));
-                        }
-
-                        self.visit_stmt(stmt, &mut Scope::over(scope))
+                    let (live, dead) = if cond_bool {
+                        (Some(stmt), else_stmt.as_ref())
                     } else {
-                        self.hints.push(SemanticHint::DeadCode(stmt.span.clone()));
+                        (else_stmt.as_ref(), Some(stmt))
+                    };
 
-                        else_stmt.as_ref().and_then(|else_stmt| {
-                            self.visit_stmt(else_stmt, &mut Scope::over(scope))
-                        })
-                    }
-                } else {
-                    let yes_flow = self.visit_stmt(stmt, &mut Scope::over(scope));
-
-                    else_stmt.as_ref().and_then(|else_stmt| {
-                        let no_flow = self.visit_stmt(else_stmt, &mut Scope::over(scope));
-
-                        match (yes_flow, no_flow) {
-                            (y, n) if y == n => y,
-                            (Some(ControlFlow::Break(span)), Some(_))
-                            | (Some(_), Some(ControlFlow::Break(span))) => {
-                                Some(ControlFlow::Break(span))
-                            }
-                            _ => None,
-                        }
-                    })
+                    dead.inspect(|dead| self.hints.push(SemanticHint::DeadCode(dead.span.clone())));
+                    live.and_then(|live| self.visit_stmt(live, scope))
                 }
-            }
+                None => {
+                    let yes_flow = self.visit_stmt(stmt, &mut Scope::over(scope));
+                    let no_flow = else_stmt
+                        .as_ref()
+                        .and_then(|stmt| self.visit_stmt(stmt, scope));
+
+                    use ControlFlow::*;
+
+                    match (yes_flow, no_flow) {
+                        (y, n) if y == n => y,
+                        (Some(Break(span)), Some(_)) | (Some(_), Some(Break(span))) => {
+                            Some(Break(span))
+                        }
+                        _ => None,
+                    }
+                }
+            },
             Stmt::While {
                 cond,
                 stmt,
                 cont_expr,
             } => {
-                let cond_val = self.visit_expr(cond, scope);
+                let cond_val = self.visit_expect_bool(cond, scope);
 
-                if cond_val != Some(Value::Bool(false)) {
-                    if let Some(expr) = cont_expr {
-                        self.visit_expr(expr, scope);
+                if let Some(cond_bool) = cond_val {
+                    self.warnings
+                        .push(SemanticWarning::ConstantCondition(Spanned::new(
+                            cond.span.clone(),
+                            cond_bool,
+                        )));
+                }
+
+                match cond_val {
+                    Some(false) => {
+                        self.hints.push(SemanticHint::DeadCode(stmt.span.clone()));
+                        None
                     }
+                    cond_val => {
+                        let inner_flow = self.visit_stmt(stmt, &mut Scope::over(scope));
 
-                    let inner_flow = self.visit_stmt(stmt, &mut Scope::over(scope));
-                    (inner_flow == Some(ControlFlow::Return) && cond_val == Some(Value::Bool(true)))
-                        .then_some(ControlFlow::Return)
-                } else {
-                    self.hints.push(SemanticHint::DeadCode(stmt.span.clone()));
-                    None
+                        cont_expr.as_ref().inspect(|expr| {
+                            self.visit_expr(expr, scope);
+                        });
+
+                        (inner_flow == Some(ControlFlow::Return) && cond_val == Some(true))
+                            .then_some(ControlFlow::Return)
+                    }
                 }
             }
             Stmt::Loop(stmt) => {
@@ -483,22 +525,39 @@ impl SemanticModel {
         symbol.anon_ref = true;
     }
 
-    fn visit_expr(&mut self, expr: &Spanned<Expr>, scope: &mut Scope<'_>) -> Option<Value> {
+    fn visit_expect_bool(&mut self, expr: &Spanned<Expr>, scope: &mut Scope<'_>) -> Option<bool> {
+        match self.visit_expr(expr, scope) {
+            EvalValue::Const(Value::Bool(b)) => Some(b),
+            EvalValue::Const(other) => {
+                self.errors.push(SemanticError::UnexpectedType {
+                    expected: ValueKind::Bool,
+                    got: other.kind(),
+                    span: expr.span.clone(),
+                });
+                None
+            }
+            EvalValue::Unknown => None,
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Spanned<Expr>, scope: &mut Scope<'_>) -> EvalValue {
         match &expr.val {
-            Expr::IntLit(n) => Some(Value::Int(*n as i64)),
-            Expr::StrLit(s) => Some(Value::Str(s.clone())),
-            Expr::BoolLit(b) => Some(Value::Bool(*b)),
-            Expr::NullLit => Some(Value::Null),
+            Expr::IntLit(n) => EvalValue::Const(Value::Int(*n as i64)),
+            Expr::StrLit(s) => EvalValue::Const(Value::Str(s.clone())),
+            Expr::BoolLit(b) => EvalValue::Const(Value::Bool(*b)),
+            Expr::NullLit => EvalValue::Const(Value::Null),
             Expr::BinOp(op, lhs, rhs) => {
                 let lhs = self.visit_expr(lhs, scope);
                 let rhs = self.visit_expr(rhs, scope);
 
-                lhs.zip(rhs).and_then(|(l, r)| match (op.val, l, r) {
-                    (BinOp::Add, Value::Int(l), Value::Int(r)) => Some(Value::Int(l + r)),
-                    (BinOp::Sub, Value::Int(l), Value::Int(r)) => Some(Value::Int(l - r)),
-                    (BinOp::Mul, Value::Int(l), Value::Int(r)) => Some(Value::Int(l * r)),
-                    (BinOp::Div, Value::Int(l), Value::Int(r)) => Some(Value::Int(l / r)),
-                    (BinOp::Mod, Value::Int(l), Value::Int(r)) => Some(Value::Int(l % r)),
+                lhs.const_zip_map(rhs, |l, r| match (op.val, l, r) {
+                    (BinOp::Add, Value::Int(l), Value::Int(r)) => Value::Int(l + r),
+                    (BinOp::Sub, Value::Int(l), Value::Int(r)) => Value::Int(l - r),
+                    (BinOp::Mul, Value::Int(l), Value::Int(r)) => Value::Int(l * r),
+                    (BinOp::Div, Value::Int(l), Value::Int(r)) => Value::Int(l / r),
+                    (BinOp::Mod, Value::Int(l), Value::Int(r)) => Value::Int(l % r),
+                    (BinOp::BoolAnd, Value::Bool(l), Value::Bool(r)) => Value::Bool(l && r),
+                    (BinOp::BoolOr, Value::Bool(l), Value::Bool(r)) => Value::Bool(l || r),
                     (op, lhs, rhs) => {
                         self.errors.push(SemanticError::BinOpTypeMismatch {
                             op,
@@ -506,7 +565,7 @@ impl SemanticModel {
                             rhs: rhs.kind(),
                             span: expr.span.clone(),
                         });
-                        None
+                        Value::Error
                     }
                 })
             }
@@ -514,13 +573,13 @@ impl SemanticModel {
                 let lhs = self.visit_expr(lhs, scope);
                 let rhs = self.visit_expr(rhs, scope);
 
-                lhs.zip(rhs).and_then(|(l, r)| match (op.val, l, r) {
-                    (Rel::Eq, l, r) => Some(Value::Bool(l == r)),
-                    (Rel::Neq, l, r) => Some(Value::Bool(l != r)),
-                    (Rel::Lt, Value::Int(l), Value::Int(r)) => Some(Value::Bool(l < r)),
-                    (Rel::Leq, Value::Int(l), Value::Int(r)) => Some(Value::Bool(l <= r)),
-                    (Rel::Gt, Value::Int(l), Value::Int(r)) => Some(Value::Bool(l > r)),
-                    (Rel::Geq, Value::Int(l), Value::Int(r)) => Some(Value::Bool(l >= r)),
+                lhs.const_zip_map(rhs, |l, r| match (op.val, l, r) {
+                    (Rel::Eq, l, r) => Value::Bool(l == r),
+                    (Rel::Neq, l, r) => Value::Bool(l != r),
+                    (Rel::Lt, Value::Int(l), Value::Int(r)) => Value::Bool(l < r),
+                    (Rel::Leq, Value::Int(l), Value::Int(r)) => Value::Bool(l <= r),
+                    (Rel::Gt, Value::Int(l), Value::Int(r)) => Value::Bool(l > r),
+                    (Rel::Geq, Value::Int(l), Value::Int(r)) => Value::Bool(l >= r),
                     (rel, lhs, rhs) => {
                         self.errors.push(SemanticError::RelTypeMismatch {
                             rel,
@@ -528,7 +587,7 @@ impl SemanticModel {
                             rhs: rhs.kind(),
                             span: expr.span.clone(),
                         });
-                        None
+                        Value::Error
                     }
                 })
             }
@@ -536,35 +595,33 @@ impl SemanticModel {
                 cond,
                 if_yes,
                 if_no,
-            } => {
-                let cond_val = self.visit_expr(cond, scope);
-                let if_yes_val = self.visit_expr(if_yes, scope);
-                let if_no_val = self.visit_expr(if_no, scope);
+            } => match self.visit_expect_bool(cond, scope) {
+                Some(cond_bool) => {
+                    self.warnings
+                        .push(SemanticWarning::ConstantCondition(Spanned::new(
+                            cond.span.clone(),
+                            cond_bool,
+                        )));
 
-                // TODO: implement self.as_bool(val: Value) -> Option<bool> and so on
-                cond_val.and_then(|cond_val| match cond_val {
-                    Value::Bool(cond_b) => {
-                        if cond_b {
-                            if_yes_val
-                        } else {
-                            if_no_val
-                        }
-                    }
-                    other => {
-                        self.errors.push(SemanticError::UnexpectedType {
-                            expected: ValueKind::Bool,
-                            got: other.kind(),
-                            span: cond.span.clone(),
-                        });
-                        None
-                    }
-                })
-            }
+                    let (live, dead) = if cond_bool {
+                        (if_yes, if_no)
+                    } else {
+                        (if_no, if_yes)
+                    };
+
+                    self.hints.push(SemanticHint::DeadCode(dead.span.clone()));
+                    self.visit_expr(live, scope)
+                }
+                None => {
+                    self.visit_expr(if_yes, scope);
+                    self.visit_expr(if_no, scope);
+                    EvalValue::Unknown
+                }
+            },
             Expr::Access { value, idx } => {
                 self.visit_expr(value, scope);
                 self.visit_expr(idx, scope);
-
-                None
+                EvalValue::Unknown
             }
             Expr::UnaryOp(_, expr) => self.visit_expr(expr, scope),
             Expr::ListLit(items) => {
@@ -572,7 +629,7 @@ impl SemanticModel {
                     self.visit_expr(item, scope);
                 }
 
-                None
+                EvalValue::Unknown
             }
             Expr::DictLit(items) => {
                 for (key, val) in items {
@@ -580,27 +637,28 @@ impl SemanticModel {
                     self.visit_expr(val, scope);
                 }
 
-                None
+                EvalValue::Unknown
             }
             Expr::Iden(name) => {
-                if let Some(sym_idx) = scope.get(&name.val) {
+                if let Some(sym_idx) = scope.find(&name.val) {
                     self.add_symbol_ref(sym_idx, &name.span);
                     let symbol = &self.symbols[sym_idx];
 
-                    let val = match &symbol.kind {
+                    match &symbol.kind {
                         SymbolValue::Function(..) => {
                             self.errors
                                 .push(SemanticError::FuncUsedAsValue(name.clone()));
-                            None
-                        }
-                        SymbolValue::ImmutableVariable(value)
-                        | SymbolValue::MutableVariable { value, .. } => value.as_ref(),
-                    };
 
-                    val.cloned()
+                            EvalValue::Unknown
+                        }
+                        SymbolValue::MutableVariable { .. } => EvalValue::Unknown,
+                        SymbolValue::ImmutableVariable(val) => {
+                            val.clone().map_or(EvalValue::Unknown, EvalValue::Const)
+                        }
+                    }
                 } else {
                     self.errors.push(SemanticError::UndefinedVar(name.clone()));
-                    None
+                    EvalValue::Unknown
                 }
             }
             Expr::Assign(_, lval, expr) => {
@@ -608,7 +666,7 @@ impl SemanticModel {
                 self.visit_expr(expr, scope)
             }
             Expr::FuncCall(func_name, args) => {
-                if let Some(sym_idx) = scope.get(&func_name.val) {
+                if let Some(sym_idx) = scope.find(&func_name.val) {
                     self.add_symbol_ref(sym_idx, &func_name.span);
 
                     let func_sym = &self.symbols[sym_idx];
@@ -616,7 +674,7 @@ impl SemanticModel {
                     let SymbolValue::Function(param_cnt) = func_sym.kind else {
                         self.errors
                             .push(SemanticError::VarNotCallable(func_name.clone()));
-                        return None;
+                        return EvalValue::Unknown;
                     };
 
                     if let ParamCount::Fixed(n) = param_cnt
@@ -637,7 +695,7 @@ impl SemanticModel {
                     self.visit_expr(arg, scope);
                 }
 
-                None
+                EvalValue::Unknown
             }
         }
     }
@@ -646,7 +704,7 @@ impl SemanticModel {
         match &lval.val {
             LValue::Access(inner_lval, _) => self.visit_lval(inner_lval, scope),
             LValue::Iden(name) => {
-                let Some(sym_idx) = scope.get(&name.val) else {
+                let Some(sym_idx) = scope.find(&name.val) else {
                     self.errors.push(SemanticError::UndefinedVar(name.clone()));
                     return;
                 };
@@ -663,9 +721,8 @@ impl SemanticModel {
                         self.errors
                             .push(SemanticError::CannotMutateVar(name.clone()));
                     }
-                    SymbolValue::MutableVariable { mutated, value, .. } => {
+                    SymbolValue::MutableVariable { mutated, .. } => {
                         *mutated = true;
-                        *value = None;
                     }
                 }
             }

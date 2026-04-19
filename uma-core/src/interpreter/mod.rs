@@ -74,7 +74,7 @@ impl Interpreter {
                 let func_scope = Scope::over(self.global_scope.clone());
 
                 for (param, arg) in func.val.params.iter().zip(args) {
-                    func_scope.decl_var(
+                    func_scope.decl_local(
                         param.val.name.val.clone(),
                         arg,
                         param.val.mutable.is_some(),
@@ -120,7 +120,7 @@ impl Interpreter {
                 mutable,
             } => {
                 let val = self.eval_expr(init_expr, scope)?;
-                scope.decl_var(name.val.clone(), val, mutable.is_some())?;
+                scope.decl_local(name.val.clone(), val, mutable.is_some())?;
                 None
             }
             Stmt::Expr(expr) => {
@@ -203,7 +203,7 @@ impl Interpreter {
         f: Box<ValueModifier>,
     ) -> ExecuteResult<()> {
         match &lval.val {
-            LValue::Iden(name) => scope.mutate_var(&name.val, f),
+            LValue::Iden(name) => scope.mutate(&name.val, f),
             LValue::Access(sub_lval, idx_expr) => {
                 let idx_val = self.eval_expr(idx_expr, scope)?;
 
@@ -283,7 +283,7 @@ impl Interpreter {
             Expr::BoolLit(b) => Ok(Value::Bool(*b)),
             Expr::NullLit => Ok(Value::Null),
             Expr::Iden(name) => scope
-                .get_value(&name.val)
+                .find(&name.val)
                 .ok_or_else(|| ExecuteError::UndeclaredVariable(name.val.clone())),
             Expr::StrLit(s) => Ok(Value::str(s.clone())),
             Expr::ListLit(item_exprs) => {

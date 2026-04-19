@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use derive_more::Constructor;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
-use uma_core::{core::SourceFile, util::Span};
+use uma_core::util::Span;
 
 use crate::jsonrpc::{self, ResponseError};
 
@@ -78,25 +78,22 @@ impl RequestError {
     }
 }
 
-pub type RequestHandlerResult = Result<RequestResult, RequestError>;
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
     pub text_document: Option<TextDocumentClientCapabilities>,
-    pub window: Option<WindowClientCapabilities>,
     pub general: Option<GeneralClientCapabilities>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextDocumentClientCapabilities {
-    pub publish_diagnostics: Option<PublishDiagnosticsClientCapabilities>,
     pub definition: Option<DefinitionClientCapabilities>,
     pub references: Option<ReferenceClientCapabilities>,
     pub document_symbol: Option<DocumentSymbolClientCapabilities>,
     pub rename: Option<RenameClientCapabilities>,
     pub completion: Option<CompletionClientCapabilities>,
+    pub folding_range: Option<FoldingRangeClientCapabilities>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,6 +121,10 @@ pub struct RenameClientCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct CompletionClientCapabilities {}
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldingRangeClientCapabilities {}
+
 #[derive(Debug, Clone, Deserialize_repr)]
 #[repr(i32)]
 enum PrepareSupportDefaultBehavior {
@@ -135,20 +136,6 @@ enum PrepareSupportDefaultBehavior {
 pub struct DocumentSymbolClientCapabilitiesSymbolKind {
     pub value_set: Option<Vec<SymbolKind>>,
 }
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PublishDiagnosticsClientCapabilities {}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowClientCapabilities {
-    pub show_message: Option<ShowMessageRequestClientCapabilities>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShowMessageRequestClientCapabilities {}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -292,7 +279,7 @@ pub struct ServerCapabilities {
     pub definition_provider: Option<Capability<DefinitionOptions>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub references_provider: Option<Capability<DefinitionOptions>>,
+    pub references_provider: Option<Capability<ReferenceOptions>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_symbol_provider: Option<Capability<DocumentSymbolOptions>>,
@@ -302,6 +289,9 @@ pub struct ServerCapabilities {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_provider: Option<CompletionOptions>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folding_range_provider: Option<Capability<FoldingRangeOptions>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -327,6 +317,10 @@ pub struct RenameOptions {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionOptions {}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldingRangeOptions {}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -527,6 +521,25 @@ pub struct CompletionParams {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FoldingRangeParams {
+    pub text_document: TextDocumentIdentifier,
+}
+
+#[derive(Debug, Clone, Constructor, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldingRange {
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+impl From<Span> for FoldingRange {
+    fn from(span: Span) -> Self {
+        Self::new(span.start.line as u32, span.end.line as u32)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompletionContext {
     pub trigger_kind: CompletionTriggerKind,
     pub trigger_character: Option<char>,
@@ -540,14 +553,80 @@ pub enum CompletionTriggerKind {
     TriggerForIncompleteCompletions = 3,
 }
 
+pub type RequestResult<T> = Result<T, RequestError>;
+
 #[derive(Debug, Clone, Serialize)]
-#[serde(untagged, rename_all = "camelCase")]
-pub enum RequestResult {
-    Initialize { capabilities: ServerCapabilities },
-    Shutdown,
-    DocumentSymbol(Option<Vec<DocumentSymbol>>),
-    Definition(Option<Location>),
-    References(Option<Vec<Location>>),
-    PrepareRename(Option<Range>),
-    Rename(Option<WorkspaceEdit>),
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResult {
+    pub capabilities: ServerCapabilities,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutdownResult;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentSymbolResult(pub Option<Vec<DocumentSymbol>>);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefinitionResult(pub Option<Location>);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferencesResult(pub Option<Vec<Location>>);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareRenameResult(pub Option<Range>);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameResult(pub Option<WorkspaceEdit>);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldingRangeResult(pub Option<Vec<FoldingRange>>);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionResult(pub Option<Vec<CompletionItem>>);
+
+#[derive(Debug, Clone, Copy, Serialize_repr)]
+#[repr(i32)]
+pub enum CompletionItemKind {
+    Text = 1,
+    Method = 2,
+    Function = 3,
+    Constructor = 4,
+    Field = 5,
+    Variable = 6,
+    Class = 7,
+    Interface = 8,
+    Module = 9,
+    Property = 10,
+    Unit = 11,
+    Value = 12,
+    Enum = 13,
+    Keyword = 14,
+    Snippet = 15,
+    Color = 16,
+    File = 17,
+    Reference = 18,
+    Folder = 19,
+    EnumMember = 20,
+    Constant = 21,
+    Struct = 22,
+    Event = 23,
+    Operator = 24,
+    TypeParameter = 25,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: Option<CompletionItemKind>,
+    pub text_exit: Option<TextEdit>,
 }

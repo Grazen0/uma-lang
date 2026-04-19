@@ -75,17 +75,16 @@ impl Scope {
         }
     }
 
-    pub fn get_value(&self, name: &str) -> Option<Value> {
+    pub fn find(&self, name: &str) -> Option<Value> {
         let vars_ref = self.vars.borrow();
 
-        vars_ref.get(name).map(|var| var.value.clone()).or_else(|| {
-            self.parent
-                .as_ref()
-                .and_then(|parent| parent.get_value(name))
-        })
+        vars_ref
+            .get(name)
+            .map(|var| var.value.clone())
+            .or_else(|| self.parent.as_ref().and_then(|parent| parent.find(name)))
     }
 
-    pub fn mutate_var(&self, name: &str, f: Box<ValueModifier>) -> ExecuteResult<()> {
+    pub fn mutate(&self, name: &str, f: Box<ValueModifier>) -> ExecuteResult<()> {
         let mut vars_ref = self.vars.borrow_mut();
 
         if let Some(val) = vars_ref.get_mut(name) {
@@ -96,13 +95,13 @@ impl Scope {
             f(&mut val.value)?;
             Ok(())
         } else if let Some(next) = &self.parent {
-            next.mutate_var(name, f)
+            next.mutate(name, f)
         } else {
             Err(ExecuteError::UndeclaredVariable(name.to_string()))
         }
     }
 
-    pub fn decl_var(&self, name: String, init_val: Value, mutable: bool) -> ExecuteResult<()> {
+    pub fn decl_local(&self, name: String, init_val: Value, mutable: bool) -> ExecuteResult<()> {
         let mut vars_ref = self.vars.borrow_mut();
 
         if vars_ref.contains_key(&name) {
