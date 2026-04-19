@@ -96,6 +96,7 @@ pub struct TextDocumentClientCapabilities {
     pub references: Option<ReferenceClientCapabilities>,
     pub document_symbol: Option<DocumentSymbolClientCapabilities>,
     pub rename: Option<RenameClientCapabilities>,
+    pub completion: Option<CompletionClientCapabilities>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,6 +119,10 @@ pub struct DocumentSymbolClientCapabilities {
 pub struct RenameClientCapabilities {
     pub prepare_support: Option<bool>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionClientCapabilities {}
 
 #[derive(Debug, Clone, Deserialize_repr)]
 #[repr(i32)]
@@ -277,12 +282,26 @@ pub enum Capability<T> {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub position_encoding: Option<PositionEncodingKind>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text_document_sync: Option<TextDocumentSyncKind>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub definition_provider: Option<Capability<DefinitionOptions>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub references_provider: Option<Capability<DefinitionOptions>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub document_symbol_provider: Option<Capability<DocumentSymbolOptions>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rename_provider: Option<Capability<RenameOptions>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_provider: Option<CompletionOptions>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -304,6 +323,10 @@ pub struct DocumentSymbolOptions {
 pub struct RenameOptions {
     pub prepare_provider: Option<bool>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionOptions {}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -492,6 +515,29 @@ pub struct RenameParams {
 pub struct WorkspaceEdit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changes: Option<HashMap<String, Vec<TextEdit>>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionParams {
+    #[serde(flatten)]
+    pub pos: TextDocumentPositionParams,
+    pub context: Option<CompletionContext>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionContext {
+    pub trigger_kind: CompletionTriggerKind,
+    pub trigger_character: Option<char>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize_repr)]
+#[repr(i32)]
+pub enum CompletionTriggerKind {
+    Invoked = 1,
+    TriggerCharacter = 2,
+    TriggerForIncompleteCompletions = 3,
 }
 
 #[derive(Debug, Clone, Serialize)]

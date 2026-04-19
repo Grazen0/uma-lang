@@ -11,29 +11,30 @@ use uma_core::{
     fmt::DisplayWithSrcExt,
     parser::{ParseError, UmaParser, ast::Program},
     scanner::Scanner,
-    semantic::{self, SemanticModel},
+    semantic::SemanticModel,
 };
 
 use crate::{
     jsonrpc::{self, Request, Response},
     structs::{
-        Capability, DefinitionParams, Diagnostic, DiagnosticSeverity, DiagnosticTag,
-        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        DocumentSymbol, DocumentSymbolParams, InitializeParams, InitializedParams, Location,
-        LogMessageParams, MessageType, OutNotification, Position, PositionEncodingKind,
-        PrepareRenameParams, PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions,
-        RenameParams, RequestError, RequestHandlerResult, RequestResult, ServerCapabilities,
-        ShowMessageParams, SymbolKind, TextDocumentSyncKind, TextEdit, WorkspaceEdit,
+        Capability, CompletionOptions, CompletionParams, DefinitionParams, Diagnostic,
+        DiagnosticSeverity, DiagnosticTag, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+        DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, InitializeParams,
+        InitializedParams, Location, LogMessageParams, MessageType, OutNotification, Position,
+        PositionEncodingKind, PrepareRenameParams, PublishDiagnosticsParams, Range,
+        ReferenceParams, RenameOptions, RenameParams, RequestError, RequestHandlerResult,
+        RequestResult, ServerCapabilities, ShowMessageParams, SymbolKind, TextDocumentSyncKind,
+        TextEdit, WorkspaceEdit,
     },
 };
 
 macro_rules! match_handlers {
-    ($self:expr, $raw_params:expr, $method_var:expr, $($method:literal => $handler:ident),*, _ => $fallback:expr) => {
+    ($self:expr, $raw_params:expr, $method_var:expr, $($method:literal => $handler:ident),*, $fb_iden:ident => $fallback:expr) => {
         match $method_var {
             $(
                 $method => $self.$handler(serde_json::from_value($raw_params.unwrap_or(Value::Null))?)?,
             )*
-            _ => $fallback,
+            $fb_iden => $fallback,
         }
     };
 }
@@ -160,7 +161,8 @@ impl<I: BufRead, O: Write> Server<I, O> {
             "textDocument/documentSymbol" => handle_document_symbol,
             "textDocument/prepareRename" => handle_prepare_rename,
             "textDocument/rename" => handle_rename,
-            _ => Err(RequestError::MethodNotFound)
+            "textDocument/completion" => handle_completion,
+            _method => Err(RequestError::MethodNotFound)
 
         };
 
@@ -186,8 +188,8 @@ impl<I: BufRead, O: Write> Server<I, O> {
             "textDocument/didOpen" => handle_did_open,
             "textDocument/didChange" => handle_did_change,
             "textDocument/didClose" => handle_did_close,
-            _ => {
-                self.show(MessageType::Warning, format!("unknown notification: `{method}`"))?;
+            method => {
+                self.log(MessageType::Warning, format!("unknown notification: `{method}`"))?;
             }
         }
         Ok(())
@@ -256,6 +258,8 @@ impl<I: BufRead, O: Write> Server<I, O> {
         let supports_prepare_rename = doc_capabilities
             .and_then(|doc| doc.rename.as_ref())
             .is_some_and(|rename| rename.prepare_support.is_some_and(|b| b));
+        // let supports_completion = doc_capabilities.is_some_and(|doc| doc.completion.is_some());
+        let supports_completion = false;
 
         Ok(Ok(RequestResult::Initialize {
             capabilities: ServerCapabilities {
@@ -273,6 +277,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
                         Capability::Supported(true)
                     }
                 }),
+                completion_provider: supports_completion.then_some(CompletionOptions {}),
             },
         }))
     }
@@ -421,6 +426,13 @@ impl<I: BufRead, O: Write> Server<I, O> {
         }))))
     }
 
+    fn handle_completion(
+        &mut self,
+        _params: CompletionParams,
+    ) -> anyhow::Result<RequestHandlerResult> {
+        todo!()
+    }
+
     // Notification handlers ==================================================
 
     fn handle_initialized(&mut self, _params: InitializedParams) -> anyhow::Result<()> {
@@ -497,7 +509,7 @@ impl<I: BufRead, O: Write> Server<I, O> {
             let not_mutated_diags_iter = model
                 .symbols()
                 .iter()
-                .filter(|sym| sym.kind == semantic::SymbolKind::MutableVariable { mutated: false })
+                .filter(|sym| sym.is_unnecessarily_mut())
                 .filter_map(|sym| {
                     sym.span.as_ref().map(|span| Diagnostic {
                         range: span.clone().into(),
