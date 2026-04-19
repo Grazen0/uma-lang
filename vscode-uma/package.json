@@ -1,0 +1,82 @@
+{
+	"name": "uma-lang",
+	"description": "Uma Language support for Visual Studio Code",
+	"author": "Grazen0",
+	"license": "MIT",
+	"version": "0.1.0",
+	"publisher": "vscode-samples",
+	"categories": [
+		"Programming Languages"
+	],
+	"engines": {
+		"vscode": "^1.100.0"
+	},
+	"activationEvents": [
+		"onLanguage:plaintext"
+	],
+	"main": "./out/extension",
+	"contributes": {
+		"languages": [
+			{
+				"id": "uma",
+				"extensions": [
+					".uma"
+				],
+				"aliases": [
+					"Uma"
+				]
+			}
+		],
+		"configurationDefaults": {
+			"[uma]": {
+				"files.eol": "\n"
+			}
+		},
+		"configuration": {
+			"type": "object",
+			"title": "Uma",
+			"properties": {
+				"uma.umals.trace.server": {
+					"scope": "window",
+					"type": "string",
+					"enum": [
+						"off",
+						"messages",
+						"verbose"
+					],
+					"default": "off",
+					"description": "Traces the communication between VS Code and the language server."
+				},
+				"uma.umals.path": {
+					"scope": "machine-overridable",
+					"type": "string",
+					"description": "Path to the `umals` executable. You must restart for this to take effect.",
+					"format": "path"
+				}
+			}
+		},
+		"grammars": [
+			{
+				"language": "uma",
+				"scopeName": "source.uma",
+				"path": "./syntaxes/uma.tmLanguage.json"
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"build": "tsc -b",
+		"watch": "tsc -b -w",
+		"lint": "eslint",
+		"postinstall": "npm install"
+	},
+	"devDependencies": {
+		"@types/node": "^22",
+		"typescript": "^5.9.2",
+		"typescript-eslint": "^8.39.0"
+	},
+	"dependencies": {
+		"@types/vscode": "^1.116.0",
+		"vscode-languageclient": "^9.0.1"
+	}
+}

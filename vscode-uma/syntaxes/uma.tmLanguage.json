@@ -1,0 +1,104 @@
+{
+	"$schema": "https://www.schemastore.org/tmlanguage.json",
+	"scopeName": "source.uma",
+	"fileTypes": [
+		"uma"
+	],
+	"foldingStartMarker": "{\\s*$",
+	"foldingStopMarker": "^\\s*}",
+	"patterns": [
+		{
+			"name": "comment.line.double-slash.uma",
+			"begin": "#",
+			"end": "$"
+		},
+		{
+			"name": "keyword.operator.comparison.uma",
+			"match": "(\\b(&&|\\|\\|)\\b)|(==|!=|<=|>=|<|>)"
+		},
+		{
+			"name": "keyword.operator.arithmetic.uma",
+			"match": "(-|\\+|\\*|/|%)=?"
+		},
+		{
+			"name": "keyword.operator.assignment.uma",
+			"match": "="
+		},
+		{
+			"name": "punctuation.comma.uma",
+			"match": ","
+		},
+		{
+			"name": "punctuation.separator.key-value.uma",
+			"match": ":"
+		},
+		{
+			"name": "punctuation.terminator.statement.uma",
+			"match": ";"
+		},
+		{
+			"name": "keyword.control.uma",
+			"match": "\\b(if|else|while|loop|return|break|continue)\\b"
+		},
+		{
+			"name": "keyword.constant.default.uma",
+			"match": "\\b(null)\\b"
+		},
+		{
+			"name": "keyword.constant.bool.uma",
+			"match": "\\b(true|false)\\b"
+		},
+		{
+			"name": "storage.type.uma",
+			"match": "\\b(let|mut)\\b"
+		},
+		{
+			"match": "\\b(fn)\\s+([_a-zA-Z][_a-zA-Z0-9]*)\\b",
+			"captures": {
+				"1": {
+					"name": "storage.type.function.uma"
+				},
+				"2": {
+					"name": "entity.name.function.uma"
+				}
+			}
+		},
+		{
+			"name": "meta.function.call.uma",
+			"patterns": [
+				{
+					"name": "entity.name.function.uma",
+					"match": "([_a-zA-Z][_a-zA-Z0-9]*)(?=\\s*\\()"
+				}
+			]
+		},
+		{
+			"name": "variable.uma",
+			"patterns": [
+				{
+					"match": "\\b[_a-zA_Z][_a-zA-Z0-9]*\\b",
+					"name": "variable.uma"
+				}
+			]
+		},
+		{
+			"name": "entity.name.function.uma",
+			"match": "\\b(fn)\\b"
+		},
+		{
+			"name": "string.quoted.double.uma",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.uma",
+					"match": "\\."
+				}
+			]
+		},
+		{
+			"name": "constant.numeric.uma",
+			"match": "\\b[0-9]+\\b"
+		}
+	]
+}

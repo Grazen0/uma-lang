@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"module": "commonjs",
+		"target": "ES2024",
+		"lib": [
+			"ES2024"
+		],
+		"outDir": "out",
+		"rootDir": "src",
+		"sourceMap": true,
+		"strict": true,
+		"noImplicitAny": true,
+		"noImplicitOverride": true,
+		"noImplicitReturns": true,
+		"allowUnreachableCode": false
+	}
+}
