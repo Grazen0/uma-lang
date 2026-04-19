@@ -51,6 +51,9 @@ pub enum ExecuteError {
 
     #[display("cannot mutate immutable variable `{_0}`")]
     CannotMutateVar(#[error(ignore)] String),
+
+    #[display("cannot index variable of type '{_0}'")]
+    VarNotIndexable(#[error(ignore)] ValueKind),
 }
 
 pub type ExecuteResult<T> = Result<T, ExecuteError>;

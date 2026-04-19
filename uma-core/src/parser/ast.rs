@@ -1,6 +1,9 @@
 use derive_more::Display;
 
-use crate::{parser::error::ParseError, util::Spanned};
+use crate::{
+    parser::error::ParseError,
+    util::{Span, Spanned},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -10,7 +13,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncParam {
     pub name: Spanned<String>,
-    pub mutable: bool,
+    pub mutable: Option<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,7 +51,7 @@ pub enum Stmt {
     VarDecl {
         name: Spanned<String>,
         init_expr: Box<Spanned<Expr>>,
-        mutable: bool,
+        mutable: Option<Span>,
     },
     Expr(Spanned<Expr>),
     Block(Vec<Spanned<Stmt>>),
@@ -68,24 +71,37 @@ pub enum Stmt {
     Continue,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum Rel {
+    #[display("==")]
     Eq,
+    #[display("!=")]
     Neq,
+    #[display(">")]
     Gt,
+    #[display(">=")]
     Geq,
+    #[display("<")]
     Lt,
+    #[display("<=")]
     Leq,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum BinOp {
+    #[display("+")]
     Add,
+    #[display("-")]
     Sub,
+    #[display("*")]
     Mul,
+    #[display("/")]
     Div,
+    #[display("%")]
     Mod,
+    #[display("&&")]
     BoolAnd,
+    #[display("||")]
     BoolOr,
 }
 
@@ -105,10 +121,13 @@ pub enum AssignOp {
     Mod,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum UnaryOp {
+    #[display("+")]
     Plus,
+    #[display("-")]
     Minus,
+    #[display("!")]
     BoolNot,
 }
 

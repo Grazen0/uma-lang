@@ -74,7 +74,11 @@ impl Interpreter {
                 let func_scope = Scope::over(self.global_scope.clone());
 
                 for (param, arg) in func.val.params.iter().zip(args) {
-                    func_scope.decl_var(param.val.name.val.clone(), arg, param.val.mutable)?;
+                    func_scope.decl_var(
+                        param.val.name.val.clone(),
+                        arg,
+                        param.val.mutable.is_some(),
+                    )?;
                 }
 
                 let result = self.execute_stmts(&func.val.stmts, &Rc::new(func_scope))?;
@@ -116,7 +120,7 @@ impl Interpreter {
                 mutable,
             } => {
                 let val = self.eval_expr(init_expr, scope)?;
-                scope.decl_var(name.val.clone(), val, *mutable)?;
+                scope.decl_var(name.val.clone(), val, mutable.is_some())?;
                 None
             }
             Stmt::Expr(expr) => {
@@ -229,7 +233,7 @@ impl Interpreter {
 
                             f(val)
                         }
-                        _ => todo!(),
+                        other => Err(ExecuteError::VarNotIndexable(other.kind())),
                     }),
                 )
             }
@@ -419,21 +423,6 @@ impl Interpreter {
                             .cloned()
                             .ok_or(ExecuteError::IndexOutOfBounds(idx_int))
                     }
-                    Value::Str(str_rc) => {
-                        let idx_int = *idx_val.as_int()?;
-                        let idx_usize: usize = idx_int
-                            .try_into()
-                            .map_err(|_| ExecuteError::IndexOutOfBounds(idx_int))?;
-
-                        let str = str_rc.borrow();
-                        let b = str
-                            .as_bytes()
-                            .get(idx_usize)
-                            .copied()
-                            .ok_or(ExecuteError::IndexOutOfBounds(idx_int))?;
-
-                        Ok(Value::str(String::from(b as char)))
-                    }
                     Value::Dict(items) => {
                         let idx_sym = DictKey::try_from(idx_val)?;
                         let val = items
@@ -444,7 +433,7 @@ impl Interpreter {
 
                         Ok(val)
                     }
-                    _ => todo!(),
+                    other => Err(ExecuteError::VarNotIndexable(other.kind())),
                 }
             }
         }

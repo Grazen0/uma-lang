@@ -10,13 +10,6 @@ use crate::{
 };
 use std::iter::Peekable;
 
-fn make_parse_result<T>(val: T, errors: Vec<ParseError>) -> ParseResult<T> {
-    if errors.is_empty() {
-        Ok(val)
-    } else {
-        Err(errors)
-    }
-}
 #[derive(Debug)]
 pub struct UmaParser<'a, Iter: Iterator<Item = Spanned<Token>>> {
     tokens: Peekable<&'a mut Iter>,
@@ -118,9 +111,9 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
         if let Some(mut_tok) = self.accept_token(TokenKind::Mut) {
             let name = self.expect(TokenKind::Iden)?.map(Token::assume_iden);
 
-            Ok(Spanned::merge(mut_tok, name, |_, name| FuncParam {
+            Ok(Spanned::merge(mut_tok, name, |mut_tok, name| FuncParam {
                 name,
-                mutable: true,
+                mutable: Some(mut_tok.span),
             }))
         } else {
             let name = self.expect(TokenKind::Iden)?.map(Token::assume_iden);
@@ -129,7 +122,7 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
                 name.span.clone(),
                 FuncParam {
                     name,
-                    mutable: false,
+                    mutable: None,
                 },
             ))
         }
@@ -155,7 +148,7 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
                 Stmt::Block(blk_stmts)
             }))
         } else if let Some(let_tok) = self.accept_token(TokenKind::Let) {
-            let mutable = self.accept(TokenKind::Mut);
+            let mut_tok = self.accept_token(TokenKind::Mut);
             let name = self.expect(TokenKind::Iden)?.map(Token::assume_iden);
             self.expect(TokenKind::Assign)?;
             let expr = self.expr()?;
@@ -164,7 +157,7 @@ impl<'a, I: Iterator<Item = Spanned<Token>>> UmaParser<'a, I> {
             Ok(Spanned::merge(let_tok, semi_tok, |_, _| Stmt::VarDecl {
                 name,
                 init_expr: Box::new(expr),
-                mutable,
+                mutable: mut_tok.map(|tok| tok.span),
             }))
         } else if let Some(if_tok) = self.accept_token(TokenKind::If) {
             self.expect(TokenKind::LParen)?;

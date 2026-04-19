@@ -11,7 +11,7 @@ use uma_core::{
     fmt::DisplayWithSrcExt,
     parser::{ParseError, UmaParser, ast::Program},
     scanner::Scanner,
-    semantic::SemanticModel,
+    semantic::{self, SemanticModel},
 };
 
 use crate::{
@@ -510,13 +510,17 @@ impl<I: BufRead, O: Write> Server<I, O> {
                 .symbols()
                 .iter()
                 .filter(|sym| sym.is_unnecessarily_mut())
-                .filter_map(|sym| {
-                    sym.span.as_ref().map(|span| Diagnostic {
-                        range: span.clone().into(),
+                .map(|sym| {
+                    let semantic::SymbolValue::MutableVariable { mut_span, .. } = &sym.kind else {
+                        unreachable!()
+                    };
+
+                    Diagnostic {
+                        range: mut_span.clone().into(),
                         message: format!("variable does not need to be mutable: `{}`", sym.name),
                         severity: Some(DiagnosticSeverity::Warning),
                         ..Default::default()
-                    })
+                    }
                 });
 
             let sem_errors_iter = model.errors().iter().map(|err| Diagnostic {
@@ -526,9 +530,20 @@ impl<I: BufRead, O: Write> Server<I, O> {
                 ..Default::default()
             });
 
+            let extra_hint_diagnostics = model.hints().iter().map(|hint| Diagnostic {
+                range: hint.span().clone().into(),
+                message: hint.to_string(),
+                severity: Some(DiagnosticSeverity::Hint),
+                tags: hint
+                    .tag_unnecessary()
+                    .then(|| vec![DiagnosticTag::Unnecessary]),
+                ..Default::default()
+            });
+
             diagnostics.extend(unused_diags_iter);
             diagnostics.extend(not_mutated_diags_iter);
             diagnostics.extend(sem_errors_iter);
+            diagnostics.extend(extra_hint_diagnostics);
         }
 
         self.buffers.insert(uri.to_string(), buf);
