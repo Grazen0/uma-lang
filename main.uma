@@ -1,8 +1,8 @@
 fn matmul(a, b) {
-   if (len(a[0]) != len(b)) {
+    if (len(a[0]) != len(b)) {
         print("Matrix dimensions\n do not match");
         return null;
-   }
+    }
 
     let m = len(a);     # this is a comment
     let n = len(a[0]);  # this is a comment

@@ -187,8 +187,11 @@ pub enum SemanticError {
         span: Span,
     },
 
-    #[display("cannot use function as value: `{}`" , _0.val)]
+    #[display("cannot use function as value: `{}`", _0.val)]
     FuncUsedAsValue(Spanned<String>),
+
+    #[display("cannot use break/continue outside a loop")]
+    InvalidControlFlow(Span),
 }
 
 impl SemanticError {
@@ -206,7 +209,8 @@ impl SemanticError {
             Self::ParamCountMismatch { func_name, .. } => &func_name.span,
             Self::UnexpectedType { span, .. }
             | Self::BinOpTypeMismatch { span, .. }
-            | Self::RelTypeMismatch { span, .. } => span,
+            | Self::RelTypeMismatch { span, .. }
+            | Self::InvalidControlFlow(span) => span,
         }
     }
 }
@@ -247,10 +251,10 @@ impl From<&Program> for SemanticModel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ControlFlow {
     Return,
-    Break,
+    Break(Span),
 }
 
 impl SemanticModel {
@@ -343,7 +347,9 @@ impl SemanticModel {
             }
         }
 
-        self.visit_stmts(&func.val.stmts, &mut new_scope);
+        if let Some(ControlFlow::Break(span)) = self.visit_stmts(&func.val.stmts, &mut new_scope) {
+            self.errors.push(SemanticError::InvalidControlFlow(span));
+        }
     }
 
     fn visit_stmts(
@@ -370,7 +376,7 @@ impl SemanticModel {
 
     fn visit_stmt(&mut self, stmt: &Spanned<Stmt>, scope: &mut Scope<'_>) -> Option<ControlFlow> {
         match &stmt.val {
-            Stmt::Break | Stmt::Continue => Some(ControlFlow::Break),
+            Stmt::Break | Stmt::Continue => Some(ControlFlow::Break(stmt.span.clone())),
             Stmt::Return(None) => Some(ControlFlow::Return),
             Stmt::VarDecl {
                 name,
@@ -430,7 +436,10 @@ impl SemanticModel {
 
                         match (yes_flow, no_flow) {
                             (y, n) if y == n => y,
-                            (Some(_), Some(_)) => Some(ControlFlow::Break),
+                            (Some(ControlFlow::Break(span)), Some(_))
+                            | (Some(_), Some(ControlFlow::Break(span))) => {
+                                Some(ControlFlow::Break(span))
+                            }
                             _ => None,
                         }
                     })
