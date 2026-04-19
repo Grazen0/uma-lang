@@ -11,7 +11,7 @@ use uma_core::{
     fmt::DisplayWithSrcExt,
     parser::{ParseError, UmaParser, ast::Program},
     scanner::Scanner,
-    semantic::SemanticModel,
+    semantic::{self, SemanticModel},
 };
 
 use crate::{
@@ -487,24 +487,35 @@ impl<I: BufRead, O: Write> Server<I, O> {
                 .filter_map(|sym| {
                     sym.span.as_ref().map(|span| Diagnostic {
                         range: span.clone().into(),
-                        code: None,
                         message: format!("unused {}: `{}`", sym.kind, sym.name),
                         severity: Some(DiagnosticSeverity::Hint),
                         tags: Some(vec![DiagnosticTag::Unnecessary]),
-                        source: None,
+                        ..Default::default()
+                    })
+                });
+
+            let not_mutated_diags_iter = model
+                .symbols()
+                .iter()
+                .filter(|sym| sym.kind == semantic::SymbolKind::MutableVariable { mutated: false })
+                .filter_map(|sym| {
+                    sym.span.as_ref().map(|span| Diagnostic {
+                        range: span.clone().into(),
+                        message: format!("variable does not need to be mutable: `{}`", sym.name),
+                        severity: Some(DiagnosticSeverity::Warning),
+                        ..Default::default()
                     })
                 });
 
             let sem_errors_iter = model.errors().iter().map(|err| Diagnostic {
                 range: err.span().clone().into(),
-                code: None,
                 message: err.to_string(),
                 severity: Some(DiagnosticSeverity::Error),
-                tags: None,
-                source: None,
+                ..Default::default()
             });
 
             diagnostics.extend(unused_diags_iter);
+            diagnostics.extend(not_mutated_diags_iter);
             diagnostics.extend(sem_errors_iter);
         }
 

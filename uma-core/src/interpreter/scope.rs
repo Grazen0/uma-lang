@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use derive_more::Constructor;
 
@@ -13,15 +13,46 @@ pub type ValueModifier = dyn FnOnce(&mut Value) -> ExecuteResult<()>;
 pub type BuiltInFn<I> = fn(&mut I, Vec<Value>) -> ExecuteResult<Option<Value>>;
 
 #[derive(Debug)]
-pub enum Symbol<'a, I> {
-    Variable { value: Value, mutable: bool },
-    Function(Function<'a, I>),
+pub enum Function<I> {
+    BuiltIn(BuiltInFn<I>),
+    UserDef(Spanned<Func>),
 }
 
 #[derive(Debug)]
-pub enum Function<'a, I> {
-    BuiltIn(BuiltInFn<I>),
-    UserDef(&'a Spanned<Func>),
+pub struct FunctionScope<I> {
+    funcs: HashMap<String, Arc<Function<I>>>,
+    parent: Option<Arc<FunctionScope<I>>>,
+}
+
+impl<I> FunctionScope<I> {
+    pub fn new() -> Self {
+        Self {
+            funcs: HashMap::new(),
+            parent: None,
+        }
+    }
+
+    pub fn over(parent: Arc<FunctionScope<I>>) -> Self {
+        Self {
+            funcs: HashMap::new(),
+            parent: Some(parent),
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Arc<Function<I>>> {
+        self.funcs
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
+    }
+
+    pub fn insert_local(&mut self, name: String, value: Function<I>) -> ExecuteResult<()> {
+        if self.funcs.contains_key(&name) {
+            return Err(ExecuteError::FuncRedeclared(name));
+        }
+
+        self.funcs.insert(name, Arc::new(value));
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Constructor)]

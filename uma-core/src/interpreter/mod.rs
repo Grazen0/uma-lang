@@ -11,9 +11,9 @@ use std::{
 use crate::{
     interpreter::{
         core::{DictKey, ExecuteError, ExecuteResult, Value},
-        scope::{Scope, ValueModifier},
+        scope::{Function, FunctionScope, Scope, ValueModifier},
     },
-    parser::ast::{AssignOp, BinOp, Expr, Func, LValue, Program, Rel, Stmt, UnaryOp},
+    parser::ast::{AssignOp, BinOp, Expr, LValue, Program, Rel, Stmt, UnaryOp},
     util::Spanned,
 };
 
@@ -24,67 +24,29 @@ enum ControlFlow {
     Continue,
 }
 
-type BuiltInFn = fn(&mut Interpreter, Vec<Value>) -> ExecuteResult<Option<Value>>;
+static GLOBAL_FUNCS: LazyLock<Arc<FunctionScope<Interpreter>>> = LazyLock::new(|| {
+    let mut s = FunctionScope::new();
 
-#[derive(Debug, Clone)]
-enum Function<'a> {
-    BuiltIn(BuiltInFn),
-    UserDef(&'a Spanned<Func>),
-}
-
-#[derive(Debug, Default)]
-struct FunctionScope<'a> {
-    funcs: HashMap<String, Function<'a>>,
-    parent: Option<Arc<FunctionScope<'a>>>,
-}
-
-impl<'a> FunctionScope<'a> {
-    fn over(parent: Arc<FunctionScope<'a>>) -> Self {
-        Self {
-            parent: Some(parent),
-            ..Default::default()
-        }
-    }
-
-    fn get(&self, name: &str) -> Option<&Function<'a>> {
-        self.funcs
-            .get(name)
-            .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
-    }
-
-    fn insert(&mut self, name: String, value: Function<'a>) -> ExecuteResult<()> {
-        if self.funcs.contains_key(&name) {
-            return Err(ExecuteError::FuncRedeclared(name));
-        }
-
-        self.funcs.insert(name, value);
-        Ok(())
-    }
-}
-
-static GLOBAL_FUNCS: LazyLock<Arc<FunctionScope<'_>>> = LazyLock::new(|| {
-    let mut s = FunctionScope::default();
-
-    s.insert("print".to_string(), Function::BuiltIn(builtins::print))
+    s.insert_local("print".to_string(), Function::BuiltIn(builtins::print))
         .unwrap();
-    s.insert("len".to_string(), Function::BuiltIn(builtins::len))
+    s.insert_local("len".to_string(), Function::BuiltIn(builtins::len))
         .unwrap();
 
     Arc::new(s)
 });
 
 #[derive(Debug)]
-pub struct Interpreter<'a> {
+pub struct Interpreter {
     global_scope: Rc<Scope>,
-    user_funcs: FunctionScope<'a>,
+    user_funcs: FunctionScope<Self>,
 }
 
-impl<'a> Interpreter<'a> {
-    pub fn new(program: &'a Program) -> ExecuteResult<Self> {
+impl Interpreter {
+    pub fn new(program: &Program) -> ExecuteResult<Self> {
         let mut user_funcs = FunctionScope::over(GLOBAL_FUNCS.clone());
 
         for func in &program.funcs {
-            user_funcs.insert(func.val.name.val.clone(), Function::UserDef(func))?;
+            user_funcs.insert_local(func.val.name.val.clone(), Function::UserDef(func.clone()))?;
         }
 
         Ok(Self {
@@ -102,20 +64,20 @@ impl<'a> Interpreter<'a> {
         let func = self
             .user_funcs
             .get(func_name)
+            .cloned()
             .ok_or_else(|| ExecuteError::UndeclaredFunction(func_name.to_string()))?;
 
-        match func {
+        match func.as_ref() {
             Function::UserDef(func) => {
                 core::expect_arg_count(func.val.params.len(), args.len())?;
 
-                let scope = Scope::over(self.global_scope.clone());
+                let func_scope = Scope::over(self.global_scope.clone());
 
                 for (param, arg) in func.val.params.iter().zip(args) {
-                    scope.decl_var(param.val.name.val.clone(), arg, param.val.mutable)?;
+                    func_scope.decl_var(param.val.name.val.clone(), arg, param.val.mutable)?;
                 }
 
-                let scope = Rc::new(scope);
-                let result = self.execute_stmts(&func.val.stmts, &scope)?;
+                let result = self.execute_stmts(&func.val.stmts, &Rc::new(func_scope))?;
 
                 match result {
                     None => Ok(None),

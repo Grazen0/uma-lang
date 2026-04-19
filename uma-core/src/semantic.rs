@@ -39,11 +39,32 @@ impl<'a> Scope<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamCount {
+    Fixed(usize),
+    Any,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
-#[display(rename_all = "lowercase")]
 pub enum SymbolKind {
-    Variable { mutable: bool },
-    Function,
+    #[display("variable")]
+    ImmutableVariable,
+
+    #[display("variable")]
+    MutableVariable { mutated: bool },
+
+    #[display("function")]
+    Function(ParamCount),
+}
+
+impl SymbolKind {
+    pub fn variable(mutable: bool) -> Self {
+        if mutable {
+            Self::MutableVariable { mutated: false }
+        } else {
+            Self::ImmutableVariable
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +127,13 @@ pub enum SemanticError {
 
     #[display("duplicate function parameter: `{}`", _0.val)]
     DuplicateParam(Spanned<String>),
+
+    #[display("function `{}` expected {expected} arguments, got {got}", func_name.val)]
+    ParamCountMismatch {
+        func_name: Spanned<String>,
+        expected: usize,
+        got: usize,
+    },
 }
 
 impl SemanticError {
@@ -119,6 +147,7 @@ impl SemanticError {
             | Self::FuncNotAssignable(name)
             | Self::CannotMutateVar(name)
             | Self::DuplicateParam(name) => &name.span,
+            Self::ParamCountMismatch { func_name, .. } => &func_name.span,
         }
     }
 }
@@ -174,13 +203,24 @@ impl SemanticModel {
     fn visit_program(&mut self, program: &Program) {
         let mut std_scope = Scope::default();
 
-        self.add_anonymous_symbol("print".to_string(), SymbolKind::Function, &mut std_scope);
-        self.add_anonymous_symbol("len".to_string(), SymbolKind::Function, &mut std_scope);
+        self.add_anonymous_symbol(
+            "print".to_string(),
+            SymbolKind::Function(ParamCount::Any),
+            &mut std_scope,
+        );
+        self.add_anonymous_symbol(
+            "len".to_string(),
+            SymbolKind::Function(ParamCount::Fixed(1)),
+            &mut std_scope,
+        );
 
         let mut file_scope = Scope::over(&std_scope);
 
         for func in &program.funcs {
-            let new_sym = Symbol::from_spanned(func.val.name.clone(), SymbolKind::Function);
+            let new_sym = Symbol::from_spanned(
+                func.val.name.clone(),
+                SymbolKind::Function(ParamCount::Fixed(func.val.params.len())),
+            );
             let sym_idx = self.add_symbol(new_sym);
 
             if !file_scope.insert(func.val.name.val.clone(), sym_idx) {
@@ -204,9 +244,7 @@ impl SemanticModel {
         for param in &func.val.params {
             let sym_idx = self.add_symbol(Symbol::from_spanned(
                 param.val.name.clone(),
-                SymbolKind::Variable {
-                    mutable: param.val.mutable,
-                },
+                SymbolKind::variable(param.val.mutable),
             ));
 
             if !new_scope.insert(param.val.name.val.clone(), sym_idx) {
@@ -231,10 +269,8 @@ impl SemanticModel {
                 init_expr,
                 mutable,
             } => {
-                let sym_idx = self.add_symbol(Symbol::from_spanned(
-                    name.clone(),
-                    SymbolKind::Variable { mutable: *mutable },
-                ));
+                let new_sym = SymbolKind::variable(*mutable);
+                let sym_idx = self.add_symbol(Symbol::from_spanned(name.clone(), new_sym));
 
                 if !scope.insert(name.val.clone(), sym_idx) {
                     self.errors.push(SemanticError::VarRedeclared(name.clone()));
@@ -339,12 +375,25 @@ impl SemanticModel {
             }
             Expr::FuncCall(func_name, args) => {
                 if let Some(sym_idx) = scope.get(&func_name.val) {
-                    if self.symbols[sym_idx].kind != SymbolKind::Function {
-                        self.errors
-                            .push(SemanticError::VarNotCallable(func_name.clone()))
-                    }
-
                     self.add_symbol_ref(sym_idx, &func_name.span);
+
+                    let func_sym = &self.symbols[sym_idx];
+
+                    let SymbolKind::Function(param_cnt) = func_sym.kind else {
+                        self.errors
+                            .push(SemanticError::VarNotCallable(func_name.clone()));
+                        return;
+                    };
+
+                    if let ParamCount::Fixed(n) = param_cnt
+                        && n != args.len()
+                    {
+                        self.errors.push(SemanticError::ParamCountMismatch {
+                            func_name: func_name.clone(),
+                            expected: n,
+                            got: args.len(),
+                        });
+                    }
                 } else {
                     self.errors
                         .push(SemanticError::UndefinedFunc(func_name.clone()));
@@ -366,19 +415,20 @@ impl SemanticModel {
                     return;
                 };
 
-                let sym = &self.symbols[sym_idx];
+                self.add_symbol_ref(sym_idx, &name.span);
+                let sym = &mut self.symbols[sym_idx];
 
-                match sym.kind {
-                    SymbolKind::Function => self
-                        .errors
-                        .push(SemanticError::FuncNotAssignable(name.clone())),
-                    SymbolKind::Variable { mutable } => {
-                        if !mutable {
-                            self.errors
-                                .push(SemanticError::CannotMutateVar(name.clone()));
-                        }
-
-                        self.add_symbol_ref(sym_idx, &name.span);
+                match &mut sym.kind {
+                    SymbolKind::Function(..) => {
+                        self.errors
+                            .push(SemanticError::FuncNotAssignable(name.clone()));
+                    }
+                    SymbolKind::ImmutableVariable => {
+                        self.errors
+                            .push(SemanticError::CannotMutateVar(name.clone()));
+                    }
+                    SymbolKind::MutableVariable { mutated, .. } => {
+                        *mutated = true;
                     }
                 }
             }

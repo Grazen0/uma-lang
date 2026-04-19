@@ -212,7 +212,7 @@ pub enum TextDocumentSyncKind {
     Incremental = 2,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Constructor, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Constructor, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
     pub line: u32,
@@ -231,7 +231,7 @@ impl From<Position> for uma_core::util::Position {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Constructor, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Constructor, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Range {
     pub start: Position,
@@ -362,7 +362,7 @@ pub enum DiagnosticSeverity {
     Hint = 4,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostic {
     pub range: Range,

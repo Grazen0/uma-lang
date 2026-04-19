@@ -32,6 +32,13 @@ fn matmul(a, b) {
     return out;
 }
 
+fn fib(n) {
+    if (n <= 1)
+        return n;
+
+    return fib(n - 2) + fib(n - 1);
+}
+
 fn main() {
     let a = [
         [1, 2, 3],
@@ -45,11 +52,4 @@ fn main() {
     ];
 
     print(matmul(a, b));
-}
-
-fn fib(n) {
-    if (n <= 1)
-        return n;
-
-    return fib(n - 2) + fib(n - 1);
 }
