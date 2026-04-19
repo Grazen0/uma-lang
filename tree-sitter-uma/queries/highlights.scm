@@ -47,6 +47,7 @@
   ";"
   ":"
   ","
+  "?"
 ] @punctuation.delimiter
 
 (iden) @variable
