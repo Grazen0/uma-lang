@@ -4,7 +4,7 @@ func       ::= "fn" IDEN "(" {param_decl {"," param_decl}* {","}} ")" "{" {stmt}
 param_decl ::= {"mut"} IDEN
 
 stmt ::= "if" "(" expr ")" stmt {"else" stmt}
-stmt ::= "while" "gramm(" expr ")" {":" "(" expr ")"} stmt
+stmt ::= "while" "(" expr ")" {":" "(" expr ")"} stmt
 stmt ::= "loop" stmt
 stmt ::= "return" {expr} ";"
 stmt ::= "break" ";"
