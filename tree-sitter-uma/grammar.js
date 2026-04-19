@@ -43,11 +43,13 @@ module.exports = grammar({
         seq("return", optional($.expr), ";"),
         seq("break", ";"),
         seq("continue", ";"),
-        seq("let", optional("mut"), $.iden, "=", $.expr, ";"),
         seq($.expr, ";"),
+        $.decl_stmt,
         $.stmt_blk,
       ),
 
+    decl_stmt: ($) =>
+      seq("let", optional("mut"), field("left", $.iden), "=", $.expr, ";"),
     stmt_blk: ($) => prec(1, seq("{", repeat($.stmt), "}")),
 
     expr: ($) => $.assign_expr,

@@ -111,6 +111,32 @@
     }
   },
   {
+    "type": "decl_stmt",
+    "named": true,
+    "fields": {
+      "left": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "iden",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "dict_entry",
     "named": true,
     "fields": {},
@@ -279,11 +305,11 @@
       "required": false,
       "types": [
         {
-          "type": "expr",
+          "type": "decl_stmt",
           "named": true
         },
         {
-          "type": "iden",
+          "type": "expr",
           "named": true
         },
         {

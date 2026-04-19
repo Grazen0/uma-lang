@@ -1,8 +1,9 @@
 [
-  (stmt_block)
+  (stmt_blk)
   (func)
 ] @local.scope
 
-(param_decl) @local.definition
+(decl_stmt left:(iden) @local.definition)
+(param_decl (iden) @local.definition)
 
 (iden) @local.reference
